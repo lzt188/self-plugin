@@ -1,0 +1,13 @@
+.idea
+*.iml
+target
+
+/**/.idea
+/**/*.iml
+/**/target
+hs_err_*.log
+
+node_modules/
+*.log
+*.tgz
+.DS_Store
