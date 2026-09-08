@@ -322,6 +322,107 @@ await test("usage: persisted sessions fold via listSnapshots/readFrom", async ()
 	assert.equal(parsed(res).total.tokens, 60);
 });
 
+//#region usage endpoint — CURRENT harness API shapes
+//
+// The real `Session` keeps its log private behind `seq` + `snapshotEvents()`,
+// `sessionPersistence.list()` returns `{ header, revision }` snapshots, and a
+// stored log is read through an `open`/`read`/`close` handle. These tests pin
+// those shapes so a future harness rename fails loudly here instead of
+// returning HTTP 500 from the running GUI.
+
+const SOURCE = { kind: "model", provider: "deepseek-official", model: "deepseek-chat" };
+
+function v2Header(seq, time, model = "deepseek-chat", provider = "deepseek-official") {
+	return { seq, time, type: "request/header", data: { header: { config: { model, provider } } } };
+}
+
+/** A v2 assistant settlement: usage rides `data.usage` AND the stream record. */
+function v2Message(seq, time, turn, step, usage) {
+	return {
+		seq, time, type: "assistant/message",
+		data: {
+			turn, step, usage,
+			message: { id: `m-${seq}`, role: "assistant", content: [], source: SOURCE },
+			stream: [{ type: "chunk", time, chunk: { type: "usage", usage } }]
+		}
+	};
+}
+
+/** The live `Session` face: a private log behind `seq` + `snapshotEvents()`. */
+function liveSession(id, events) {
+	return {
+		id,
+		get seq() {
+			return events.length;
+		},
+		snapshotEvents: (from = 0) => Object.freeze(events.slice(from))
+	};
+}
+
+await test("usage: live sessions expose seq + snapshotEvents, not an events array", async () => {
+	const now = Date.now();
+	const session = liveSession("test-live-v2", [
+		v2Header(0, now),
+		v2Message(1, now, 1, 1, { inputTokens: 100, outputTokens: 50 })
+	]);
+	assert.equal(session.events, void 0, "the fake must match the real Session: no public events array");
+	const { routes } = await boot({ sessions: { list: () => [session] } });
+	const res = await call(handlerOf(routes, USAGE_PATH));
+	const body = parsed(res);
+	assert.equal(res.status, 200);
+	assert.equal(body.ok, true, "aggregation must not throw on the current Session face");
+	assert.equal(body.total.tokens, 150);
+	assert.equal(body.days[0].models[0].model, "deepseek-official/deepseek-chat");
+});
+
+await test("usage: incremental live fold appends without double counting", async () => {
+	const now = Date.now();
+	const events = [v2Header(0, now), v2Message(1, now, 1, 1, { inputTokens: 100, outputTokens: 50 })];
+	const { routes } = await boot({ sessions: { list: () => [liveSession("test-live-v2-inc", events)] } });
+	const handler = handlerOf(routes, USAGE_PATH);
+	assert.equal(parsed(await call(handler)).total.tokens, 150);
+	events.push(v2Message(2, Date.now(), 1, 2, { inputTokens: 10, outputTokens: 5 }));
+	assert.equal(parsed(await call(handler)).total.tokens, 165);
+});
+
+await test("usage: persisted sessions fold via list() snapshots and read handles", async () => {
+	const now = Date.now();
+	const events = [v2Header(0, now), v2Message(1, now, 1, 1, { inputTokens: 40, outputTokens: 20 })];
+	const opened = [];
+	const closed = [];
+	const persistence = {
+		list: async () => [{
+			header: { version: 2, id: "test-persisted-v2", createdAt: now, isSeeded: false },
+			revision: "rev-1",
+			eventCount: events.length
+		}],
+		open: async (id, access) => {
+			assert.equal(access, "read");
+			opened.push(id);
+			return {
+				id,
+				read: async (offset = 0) => events.filter((event) => event.seq >= offset),
+				close: async () => {
+					closed.push(id);
+				}
+			};
+		}
+	};
+	const { routes } = await boot({ persistence });
+	const handler = handlerOf(routes, USAGE_PATH);
+	assert.equal(parsed(await call(handler)).total.tokens, 60);
+	assert.deepEqual(opened, ["test-persisted-v2"]);
+	assert.deepEqual(closed, ["test-persisted-v2"], "every opened read handle is closed");
+	// An unchanged revision must short-circuit the second read entirely.
+	await call(handler);
+	assert.deepEqual(opened, ["test-persisted-v2"], "same revision re-reads nothing");
+	// A new revision folds only the appended tail.
+	events.push(v2Message(2, Date.now(), 1, 2, { inputTokens: 5, outputTokens: 5 }));
+	const bumped = { ...persistence, list: async () => [{ header: { version: 2, id: "test-persisted-v2", createdAt: now, isSeeded: false }, revision: "rev-2", eventCount: 3 }] };
+	const second = await boot({ persistence: bumped });
+	assert.equal(parsed(await call(handlerOf(second.routes, USAGE_PATH))).total.tokens, 70);
+});
+
 await test("usage: response carries the claude channel (disabled when absent)", async () => {
 	const { routes } = await boot();
 	const res = await call(handlerOf(routes, USAGE_PATH));

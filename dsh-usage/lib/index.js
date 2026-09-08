@@ -48,7 +48,12 @@ const PROVIDERS_PATH = "/api/usage/providers";
 const BALANCE_PATH = "/api/usage/balance";
 const UPSTREAM_TIMEOUT_MS = 15000;
 const REFRESH_MS = 300000;
-const CACHE_VERSION = 3;
+/**
+ * Fold-state schema version. v4 re-attributes usage to the v2 event vocabulary
+ * (assistant/message + assistant/attempt embedded streams, llm/retry-started),
+ * so every cache written by an earlier version is refolded from the logs.
+ */
+const CACHE_VERSION = 4;
 
 /** Default DeepSeek connection facts when the settings namespace is absent. */
 const DEEPSEEK_DEFAULTS = {
@@ -473,6 +478,71 @@ function withLock(run) {
 }
 
 /**
+ * Event count of a live session. The current `Session` exposes its log length
+ * as `seq` and keeps the log itself private; `events` is tolerated for older
+ * shapes.
+ */
+function liveEventCount(session) {
+	if (typeof session.seq === "number") return session.seq;
+	return Array.isArray(session.events) ? session.events.length : 0;
+}
+
+/** Events of a live session from `fromSeq` on, without copying the whole log. */
+function liveEventsFrom(session, fromSeq) {
+	if (typeof session.snapshotEvents === "function") return session.snapshotEvents(fromSeq);
+	return Array.isArray(session.events) ? session.events.slice(fromSeq) : [];
+}
+
+/**
+ * Enumerate stored sessions as `{ header, revision }` pairs, or null when the
+ * backend offers no usable listing. `list()` is the current contract and
+ * returns snapshots (`{ header, revision, … }`); `listSnapshots()` and a bare
+ * header from `list()` are tolerated as older shapes and normalized here.
+ */
+async function storedSnapshots(persistence, logger) {
+	const list = typeof persistence.list === "function" ? () => persistence.list()
+		: typeof persistence.listSnapshots === "function" ? () => persistence.listSnapshots()
+		: null;
+	if (list === null) return null;
+	let raw;
+	try {
+		raw = await list();
+	} catch (error) {
+		logger.warn(`usage: session enumeration failed: ${String(error)}`);
+		return null;
+	}
+	if (!Array.isArray(raw)) return null;
+	const normalized = [];
+	for (const entry of raw) {
+		if (entry === null || typeof entry !== "object") continue;
+		// A snapshot wraps its metadata; a bare header is the metadata itself.
+		const isSnapshot = entry.header !== null && typeof entry.header === "object";
+		const header = isSnapshot ? entry.header : entry;
+		if (typeof header.id !== "string" || header.id === "") continue;
+		normalized.push({ header, revision: isSnapshot ? entry.revision : void 0 });
+	}
+	return normalized;
+}
+
+/**
+ * Read one stored session's events from `fromSeq` on. Current backends hand out
+ * a per-session handle (`open` + `read` + `close`); a `readFrom` shortcut is
+ * tolerated for older ones.
+ */
+async function readStoredEvents(persistence, id, fromSeq) {
+	if (typeof persistence.readFrom === "function") {
+		const result = await persistence.readFrom(id, fromSeq);
+		return result?.events ?? [];
+	}
+	const handle = await persistence.open(id, "read");
+	try {
+		return await handle.read(fromSeq);
+	} finally {
+		await (handle.close?.() ?? Promise.resolve());
+	}
+}
+
+/**
  * Collect per-day usage across live and persisted sessions, incrementally.
  * Live sessions fold only the in-memory events added since the last fold;
  * persisted sessions are skipped when the backend's opaque revision is
@@ -496,9 +566,9 @@ export async function collectUsage(ctx) {
 					state.currentModel = null;
 					state.consumed = 0;
 				}
-				const count = session.events.length;
+				const count = liveEventCount(session);
 				if ((state.consumed ?? 0) < count) {
-					applyUsageDelta(state, session.events.slice(state.consumed ?? 0));
+					applyUsageDelta(state, liveEventsFrom(session, state.consumed ?? 0));
 					state.consumed = count;
 				}
 				state.kind = "live";
@@ -508,18 +578,14 @@ export async function collectUsage(ctx) {
 		const persistence = ctx.get("sessionPersistence");
 		const persistedIds = new Set();
 		if (persistence !== void 0) {
-			let snapshots = null;
-			if (typeof persistence.listSnapshots === "function") {
-				try {
-					snapshots = await persistence.listSnapshots();
-				} catch (error) {
-					ctx.logger.warn(`usage: listSnapshots failed, falling back to list(): ${String(error)}`);
-				}
+			const snapshots = await storedSnapshots(persistence, ctx.logger);
+			if (snapshots === null) {
+				ctx.logger.warn("usage: sessionPersistence offers no usable listing; persisted sessions are skipped");
 			}
-			const metas = snapshots !== null ? snapshots.map((entry) => entry.header) : await persistence.list();
+			const metas = snapshots ?? [];
 			const revisionOf = new Map();
-			if (snapshots !== null) for (const entry of snapshots) revisionOf.set(entry.header.id, entry.revision);
-			for (const meta of metas) {
+			for (const entry of metas) revisionOf.set(entry.header.id, entry.revision);
+			for (const { header: meta } of metas) {
 				persistedIds.add(meta.id);
 				if (attached.has(meta.id)) continue;
 				const state = cache.sessions[meta.id] ?? createUsageState();
@@ -529,7 +595,7 @@ export async function collectUsage(ctx) {
 					try {
 						const wasPersisted = state.kind === "persisted";
 						const fromSeq = wasPersisted ? state.consumed : 0;
-						const { events } = await persistence.readFrom(meta.id, fromSeq);
+						const events = await readStoredEvents(persistence, meta.id, fromSeq);
 						if (!wasPersisted) {
 							state.days = new Map();
 							state.hours = new Map();
@@ -548,7 +614,7 @@ export async function collectUsage(ctx) {
 							state.lastSample = null;
 							state.currentModel = null;
 							state.consumed = 0;
-							const { events: allEvents } = await persistence.readFrom(meta.id, 0);
+							const allEvents = await readStoredEvents(persistence, meta.id, 0);
 							applyUsageDelta(state, allEvents);
 							state.consumed = allEvents.length > 0 ? allEvents[allEvents.length - 1].seq : 0;
 						} else if (fresh.length > 0) {

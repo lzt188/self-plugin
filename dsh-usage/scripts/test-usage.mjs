@@ -45,6 +45,100 @@ function message(seq, time, turn, step, usage, source) {
 	return { seq, time, type: "assistant/message", data: { turn, step, usage, message: { source } } };
 }
 
+//#region v2 (current harness) event vocabulary
+
+/** One compacted stream record holding a verbatim usage chunk. */
+function usageRecord(time, usage) {
+	return { type: "chunk", time, chunk: { type: "usage", usage } };
+}
+
+/** v2 `assistant/message` that reports usage ONLY inside its embedded stream. */
+function streamedMessage(seq, time, turn, step, usage, source, prefix = []) {
+	return {
+		seq, time, type: "assistant/message",
+		data: { turn, step, message: { source }, stream: [...prefix, usageRecord(time, usage)] }
+	};
+}
+
+/** v2 `assistant/attempt`: committed no message, so usage rides the stream. */
+function attempt(seq, time, turn, step, usage) {
+	return { seq, time, type: "assistant/attempt", data: { turn, step, stream: [usageRecord(time, usage)] } };
+}
+
+function retryStarted(seq, time, turn, step) {
+	return { seq, time, type: "llm/retry-started", data: { turn, step, retry: 1 } };
+}
+
+await test("v2 message reports usage only inside its embedded stream", () => {
+	const events = [
+		header(DAY1, "deepseek-chat"),
+		streamedMessage(2, DAY1, 1, 1, { inputTokens: 70, outputTokens: 12 }, { provider: "deepseek-official", model: "deepseek-chat" })
+	];
+	const entry = foldUsage(events).get(dayKey(DAY1));
+	assert.equal(entry.totals.inputTokens, 70);
+	assert.equal(entry.totals.outputTokens, 12);
+	assert.equal(totalTokens(entry.models.get("deepseek-official/deepseek-chat")), 82);
+});
+
+await test("assistant/attempt usage is counted and attributed to the current model", () => {
+	const events = [
+		header(DAY1, "deepseek-chat"),
+		attempt(2, DAY1, 1, 1, { inputTokens: 500, outputTokens: 7 })
+	];
+	const entry = foldUsage(events).get(dayKey(DAY1));
+	assert.equal(entry.totals.inputTokens, 500);
+	assert.equal(entry.models.has("deepseek-official/deepseek-chat"), true);
+	assert.equal(entry.models.get("deepseek-official/deepseek-chat").inputTokens, 500);
+});
+
+await test("the LAST usage record of a stream is the settlement total", () => {
+	const events = [
+		header(DAY1, "deepseek-chat"),
+		streamedMessage(2, DAY1, 1, 1, { inputTokens: 300, outputTokens: 40 }, { provider: "deepseek-official", model: "deepseek-chat" },
+			[usageRecord(DAY1, { inputTokens: 100, outputTokens: 5 })])
+	];
+	const entry = foldUsage(events).get(dayKey(DAY1));
+	assert.equal(entry.totals.inputTokens, 300);
+	assert.equal(entry.totals.outputTokens, 40);
+});
+
+await test("llm/retry-started makes a retried attempt add, not replace", () => {
+	const events = [
+		header(DAY1, "deepseek-chat"),
+		attempt(2, DAY1, 1, 1, { inputTokens: 100, outputTokens: 5 }),
+		retryStarted(3, DAY1, 1, 1),
+		attempt(4, DAY1, 1, 1, { inputTokens: 110, outputTokens: 9 })
+	];
+	const entry = foldUsage(events).get(dayKey(DAY1));
+	assert.equal(entry.totals.inputTokens, 210);
+	assert.equal(entry.totals.outputTokens, 14);
+});
+
+await test("a message settling its own attempted step still replaces", () => {
+	const events = [
+		header(DAY1, "deepseek-chat"),
+		attempt(2, DAY1, 1, 1, { inputTokens: 100, outputTokens: 5 }),
+		message(3, DAY1, 1, 1, { inputTokens: 120, outputTokens: 30 }, { provider: "deepseek-official", model: "deepseek-chat" })
+	];
+	const entry = foldUsage(events).get(dayKey(DAY1));
+	assert.equal(entry.totals.inputTokens, 120);
+	assert.equal(entry.totals.outputTokens, 30);
+});
+
+await test("a retry slot for a different step does not clear the current one", () => {
+	const events = [
+		header(DAY1, "deepseek-chat"),
+		attempt(2, DAY1, 1, 1, { inputTokens: 100, outputTokens: 5 }),
+		retryStarted(3, DAY1, 1, 2),
+		attempt(4, DAY1, 1, 1, { inputTokens: 110, outputTokens: 9 })
+	];
+	const entry = foldUsage(events).get(dayKey(DAY1));
+	assert.equal(entry.totals.inputTokens, 110);
+	assert.equal(entry.totals.outputTokens, 9);
+});
+
+//#endregion
+
 await test("dayKey uses local calendar boundaries", () => {
 	assert.equal(dayKey(new Date(2025, 0, 10, 23, 59).getTime()).length, 10);
 	assert.match(dayKey(DAY1), /^\d{4}-\d{2}-\d{2}$/);

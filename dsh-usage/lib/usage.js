@@ -3,13 +3,17 @@
  * event logs. Kept free of cordis imports so it can be unit-tested and
  * validated against real logs outside the running harness.
  *
- * Aggregation semantics mirror the DSH token projection (as implemented by
- * dsh-token-meter and dsh-usage-stats, MIT):
- *   - a usage sample rides an `assistant/chunk` (`data.chunk.type === "usage"`)
- *     or an `assistant/message` (`data.usage`);
+ * Aggregation semantics mirror the DSH token projection (dsh-token-meter's
+ * `tokenUsage` unit, MIT):
+ *   - a usage sample rides an `assistant/message` (`data.usage`, falling back
+ *     to the last `usage` chunk embedded in its `data.stream`), an
+ *     `assistant/attempt` (whose usage lives ONLY in the embedded stream), or
+ *     a legacy pre-v2 `assistant/chunk` (`data.chunk.type === "usage"`);
  *   - a repeated sample for the same (turn, step) REPLACES the earlier value
  *     instead of double counting it, and the replacement is re-attributed to
  *     the day of the later event;
+ *   - `llm/retry-started` closes that replacement slot, so a retried attempt
+ *     ADDS to the total instead of replacing the attempt that failed;
  *   - `assistant/message` names its provider/model via `data.message.source`;
  *     usage chunks fall back to the last `request/header`
  *     `data.header.config`; samples with no model information land in the
@@ -81,19 +85,40 @@ function subtractFrom(target, source) {
 	return target;
 }
 
+/**
+ * The last `usage` chunk embedded in one compacted assistant stream. A v2 log
+ * stores any chunk that cannot be merged into a delta run as
+ * `{ type: "chunk", time, chunk }`, and a stream may report usage several
+ * times, so the LAST report is the settlement's total.
+ */
+function usageFromStream(stream) {
+	if (!Array.isArray(stream)) return void 0;
+	for (let index = stream.length - 1; index >= 0; index -= 1) {
+		const record = stream[index];
+		if (record?.type === "chunk" && record.chunk?.type === "usage" && record.chunk.usage !== void 0) {
+			return record.chunk.usage;
+		}
+	}
+	return void 0;
+}
+
 /** Extract the usage sample an event carries, if any. */
 function sampleOf(event) {
-	if (event.type === "assistant/chunk" && event.data?.chunk?.type === "usage") {
-		return {
-			key: `${event.data.turn}:${event.data.step}`,
-			usage: event.data.chunk.usage
-		};
+	const data = event.data;
+	if (data === void 0 || data === null) return void 0;
+	const key = `${data.turn}:${data.step}`;
+	// Pre-v2 logs reported usage as a standalone chunk event.
+	if (event.type === "assistant/chunk") {
+		return data.chunk?.type === "usage" ? { key, usage: data.chunk.usage } : void 0;
 	}
-	if (event.type === "assistant/message" && event.data?.usage !== void 0) {
-		return {
-			key: `${event.data.turn}:${event.data.step}`,
-			usage: event.data.usage
-		};
+	if (event.type === "assistant/message") {
+		const usage = data.usage ?? usageFromStream(data.stream);
+		return usage === void 0 ? void 0 : { key, usage };
+	}
+	// An attempt that committed no message reports usage only inside its stream.
+	if (event.type === "assistant/attempt") {
+		const usage = usageFromStream(data.stream);
+		return usage === void 0 ? void 0 : { key, usage };
 	}
 	return void 0;
 }
@@ -198,6 +223,14 @@ export function applyUsageDelta(state, events) {
 		if (event.type === "request/header") {
 			const model = modelOf(event);
 			if (model !== void 0) currentModel = model;
+		}
+		// A retry reuses its step's (turn, step) pair, so close the replacement
+		// slot: the retried attempt must ADD to the total, not replace the
+		// attempt that just failed.
+		if (event.type === "llm/retry-started" && last !== null
+			&& last.key === `${event.data?.turn}:${event.data?.step}`) {
+			last = null;
+			continue;
 		}
 		const sample = sampleOf(event);
 		if (sample === void 0) continue;
