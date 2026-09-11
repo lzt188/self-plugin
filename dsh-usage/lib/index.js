@@ -703,9 +703,11 @@ async function usagePayload(ctx, { force = false, deps = {} } = {}) {
 	return payload;
 }
 
-/** Test seam: drop the materialized snapshot so the next call recomputes. */
+/** Test seam: drop the materialized snapshot and fold-state cache so the next call recomputes from scratch. */
 export function resetUsageMemo() {
 	usageMemo = null;
+	loadedCache = null;
+	loadPromise = null;
 }
 
 async function handleUsage(ctx, req, res, deps = {}) {

@@ -566,19 +566,24 @@ function cmpVer(a, b) {
 		}
 
 		/** 5-level alpha ramp derived from the accent color (heat cells). */
+		const _HEAT_ALPHAS = [0, 0.22, 0.42, 0.65, 1];
 		function heatAlpha(level) {
-			return [0, 0.22, 0.42, 0.65, 1][level] ?? 0;
+			return _HEAT_ALPHAS[level] ?? 0;
 		}
 
+		/** Precomputed accent-hued heat colors — one per level, computed once at boot. */
+		const _HEAT_COLORS = [0, 1, 2, 3, 4].map((level) => `color-mix(in srgb,var(--u-accent,#1f6feb) ${Math.round(heatAlpha(level) * 100)}%,transparent)`);
+
+		/** Precomputed neutral heat colors for the floating dock (accent reserved for balance). */
+		const _HEAT_COLORS_NEUTRAL = [0, 1, 2, 3, 4].map((level) => `color-mix(in srgb,var(--dsw-alias-label-secondary,#64748b) ${Math.round(heatAlpha(level) * 0.75 * 100)}%,transparent)`);
+
 		function heatColor(level) {
-			const alpha = heatAlpha(level);
-			return `color-mix(in srgb,var(--u-accent,#1f6feb) ${Math.round(alpha * 100)}%,transparent)`;
+			return _HEAT_COLORS[level] ?? _HEAT_COLORS[0];
 		}
 
 		/** Neutral heat ramp for the floating dock (accent is reserved for balance). */
 		function heatColorNeutral(level) {
-			const alpha = heatAlpha(level) * 0.75;
-			return `color-mix(in srgb,var(--dsw-alias-label-secondary,#64748b) ${Math.round(alpha * 100)}%,transparent)`;
+			return _HEAT_COLORS_NEUTRAL[level] ?? _HEAT_COLORS_NEUTRAL[0];
 		}
 
 		/** Bucket a value into 5 heat levels (0–4) by max. */

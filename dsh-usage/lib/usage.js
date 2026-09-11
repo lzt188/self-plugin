@@ -23,11 +23,12 @@
  */
 
 /** Local-calendar `YYYY-MM-DD` key for a millisecond epoch. */
+const _dateCache = new Date();
 export function dayKey(timeMs) {
-	const date = new Date(timeMs);
-	const month = String(date.getMonth() + 1).padStart(2, "0");
-	const day = String(date.getDate()).padStart(2, "0");
-	return `${date.getFullYear()}-${month}-${day}`;
+	_dateCache.setTime(timeMs);
+	const month = String(_dateCache.getMonth() + 1).padStart(2, "0");
+	const day = String(_dateCache.getDate()).padStart(2, "0");
+	return `${_dateCache.getFullYear()}-${month}-${day}`;
 }
 
 /** Empty token bucket. */
@@ -180,7 +181,8 @@ export function zeroHours() {
 
 /** Hour slot for an event's timestamp (local time, 0–23). */
 export function hourOf(timeMs) {
-	return new Date(timeMs).getHours();
+	_dateCache.setTime(timeMs);
+	return _dateCache.getHours();
 }
 
 function hourEntryOf(state, day) {
@@ -234,7 +236,6 @@ export function applyUsageDelta(state, events) {
 		}
 		const sample = sampleOf(event);
 		if (sample === void 0) continue;
-		const buckets = bucketsOf(sample.usage);
 		const model = modelOf(event) ?? currentModel ?? "unknown/unknown";
 		const day = dayKey(event.time);
 		const hour = hourOf(event.time);
@@ -256,6 +257,7 @@ export function applyUsageDelta(state, events) {
 				previousModelHours[last.hour] -= totalTokens(last.buckets);
 			}
 		}
+		const buckets = bucketsOf(sample.usage);
 		addInto(entry.totals, buckets);
 		let modelBucket = entry.models.get(model);
 		if (modelBucket === void 0) {
@@ -355,14 +357,16 @@ export function consumeEvents(byDay, events) {
 export function renderUsage(byDay, byHour, byModelHour, updatedAt) {
 	const days = [...byDay.entries()]
 		.map(([date, entry]) => {
-			const dayModelHours = byModelHour.get(date) ?? new Map();
+			// Hoist per-day lookups out of the model loop to avoid repeated Map.get calls.
+			const dayModelHours = byModelHour.get(date);
+			const dayHours = byHour.get(date);
 			const models = [...entry.models.entries()]
 				.map(([model, buckets]) => ({
 					model,
 					...buckets,
 					tokens: totalTokens(buckets),
 					cacheHitRate: cacheHitRate(buckets),
-					hours: dayModelHours.get(model) ?? zeroHours()
+					hours: dayModelHours?.get(model) ?? zeroHours()
 				}))
 				.sort((a, b) => b.tokens - a.tokens);
 			return {
@@ -370,7 +374,7 @@ export function renderUsage(byDay, byHour, byModelHour, updatedAt) {
 				...entry.totals,
 				tokens: totalTokens(entry.totals),
 				cacheHitRate: cacheHitRate(entry.totals),
-				hours: byHour.get(date) ?? zeroHours(),
+				hours: dayHours ?? zeroHours(),
 				models
 			};
 		})
