@@ -27,10 +27,12 @@
 
 ```bash
 npm run check        # 全量语法检查
-npm test             # 108 个离线测试，全绿才可提交
+npm test             # 116 个离线测试，全绿才可提交
 npm run test:package # 发布依赖与 client inject 契约
 node scripts/validate-claude.mjs          # 真实 ~/.claude 数据预演
 node scripts/rehearse-real-usage.mjs      # 真实 ~/.dsh/sessions 预演 + 增量折叠切片不变性
+node scripts/bench-usage.mjs              # 真实数据：冷/热折叠耗时 + P0/P2 读写次数与缓存 mtime 证据
+node scripts/bench-reload-cost.mjs        # 量化「全量重读所有日志」的成本（P0 回归的反面证据）
 node scripts/proxy-fetch.mjs <url>        # 沙箱内经 127.0.0.1:7890 代理拉取 https
 node scripts/github-research.mjs          # GitHub 星数调研（走代理，带重试）
 ```
@@ -44,8 +46,10 @@ node scripts/github-research.mjs          # GitHub 星数调研（走代理，�
 - 服务端缓存版本变更必须同步升 `CACHE_VERSION`（usage-cache.json v2 / claude cache v1），旧缓存自动失效重算。
 - **插件绑定 Harness 的三个真实 API 面，改名即 500，改 `lib/` 前先对齐**：
   1. 活会话 `ctx.sessions.list()` 返回的 `Session` **没有公开 `events`**，日志私有，只能 `session.seq`（长度）+ `session.snapshotEvents(fromSeq)` 取增量；
-  2. `ctx.sessionPersistence.list()` 返回 **snapshot**（`{ header, revision, eventCount?, sizeBytes? }`），不是裸 header；没有 `listSnapshots()`；
-  3. 读存量日志是 `open(id, "read")` → `handle.read(offset)` → `handle.close()`，**没有 `readFrom()`**，`read()` 直接返回事件数组。
+  2. **持久会话枚举优先 `ctx.sessionPersistence.listSnapshots()`**（返回 `{ header, revision }`，revision 由 stat 派生且不读事件字节）；当前 JSONL 后端的 `list()`（`session-persistence-jsonl/src/index.ts:463`）返回**裸 `SessionHeader[]`（无 revision）**，只有 `listSnapshots()`（同文件 `:468`）带 revision——用 `list()` 会让每个持久会话 revision=undefined → 每请求全量重读（实测 ~24 s）。`list()` 仅作老后端的回退，且两种形状（裸 header / `{header,revision}` snapshot）都已在 `storedSnapshots()` 归一化；
+  3. 读存量日志：若后端有 `readFrom(id, fromSeq)`（当前 JSONL 后端 `:208`，后缀读，只解析 seq≥fromSeq）优先用它；否则回退 `open(id, "read")` → `handle.read(offset)` → `handle.close()`。`readFrom` 直接返回 `{ events }`。
+- **usage 端点服务层（`usagePayload()`）**：命中 TTL（`deps.usageTtlMs`，默认 = `REFRESH_MS` 5 min）直接返回物化快照，跳过折叠 + Claude 扫描；`?refresh=1` 或后台 5 分钟周期强制重算并回灌快照（`startBackgroundRefresh` 调 `usagePayload({force:true})`）。这是**纯服务层缓存**，不改折叠语义，**不需要**升 `CACHE_VERSION`。`resetUsageMemo()` 为测试 seam，`boot()` 里必须调。
+- **增量落盘脏标记（P2）**：`collectUsage()` 只在真正有新折叠 / 新会话 / revision 变化 / 会话被清除时 `saveCache`，空闲稳态轮询**不写盘**。同样不改语义、不升 `CACHE_VERSION`。
 - **用量样本的 v2 词汇**（与 `dsh-token-meter` 的 `tokenUsage` projection 一致）：`assistant/chunk` 已废弃（v0/v1 遗留，v2 日志里为 0 条）；usage 只在 `assistant/message`（`data.usage`，缺失时回落到 `data.stream` 里**最后**一条 `{type:"chunk",chunk:{type:"usage"}}`）和 `assistant/attempt`（**只有** stream 内嵌）上；`llm/retry-started` 必须清掉同 `(turn, step)` 的替换槽，否则重试被当作重复样本吞掉。改语义必须同步升 `CACHE_VERSION`。
 - 拖拽排序用 ghost 占位方案：拖拽中不改布局，drop 时一次性提交 + FLIP 动画。
 - 面板主列固定在 `WIDGET_COLUMN`（main：余额 + 四个统计格；aside 已无驻留 widget）；recent（用量记录）与 heatmap（热力图）被 `POPUP_WIDGETS` 排除，只渲染在悬浮窗按钮触发的两个独立弹框里：用量按钮 → `[data-dsh-usage-pop]`，热力图按钮 → `[data-dsh-usage-heat]`。调面板/用量弹框宽度要同步改 `PANEL_WIDTH` 与 `.u_panel`/`.u_usagePop` 的 width（三处必须一致）。

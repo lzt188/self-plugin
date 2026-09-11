@@ -500,8 +500,15 @@ function liveEventsFrom(session, fromSeq) {
  * header from `list()` are tolerated as older shapes and normalized here.
  */
 async function storedSnapshots(persistence, logger) {
-	const list = typeof persistence.list === "function" ? () => persistence.list()
-		: typeof persistence.listSnapshots === "function" ? () => persistence.listSnapshots()
+	// Prefer `listSnapshots()`: it is the ONLY face that carries the
+	// stat-derived `revision` without loading event bytes. The current
+	// JSONL backend's `list()` returns bare `SessionHeader[]` (no revision),
+	// which would force every persisted session to be seen as changed and
+	// re-read in full on every request. `list()` is only a fallback for
+	// backends that predate `listSnapshots()` or that (per the older seam
+	// contract) already return `{ header, revision }` snapshots from `list()`.
+	const list = typeof persistence.listSnapshots === "function" ? () => persistence.listSnapshots()
+		: typeof persistence.list === "function" ? () => persistence.list()
 		: null;
 	if (list === null) return null;
 	let raw;
@@ -551,11 +558,16 @@ async function readStoredEvents(persistence, id, fromSeq) {
 export async function collectUsage(ctx) {
 	return withLock(async () => {
 		const cache = await loadCache();
+		// P2: track whether any fold state actually mutated, so a steady-state
+		// request (no new events, no revision change) does not rewrite the whole
+		// cache file to disk on every call.
+		let dirty = false;
 		const live = ctx.get("sessions");
 		const attached = new Set();
 		if (live !== void 0) {
 			for (const session of live.list()) {
 				attached.add(session.id);
+				const isNew = cache.sessions[session.id] === void 0;
 				const state = cache.sessions[session.id] ?? createUsageState();
 				if (state.kind !== "live") {
 					// Live/persisted transition: refold the whole in-memory log.
@@ -565,12 +577,15 @@ export async function collectUsage(ctx) {
 					state.lastSample = null;
 					state.currentModel = null;
 					state.consumed = 0;
+					dirty = true;
 				}
 				const count = liveEventCount(session);
 				if ((state.consumed ?? 0) < count) {
 					applyUsageDelta(state, liveEventsFrom(session, state.consumed ?? 0));
 					state.consumed = count;
+					dirty = true;
 				}
+				if (isNew) dirty = true;
 				state.kind = "live";
 				cache.sessions[session.id] = state;
 			}
@@ -588,6 +603,7 @@ export async function collectUsage(ctx) {
 			for (const { header: meta } of metas) {
 				persistedIds.add(meta.id);
 				if (attached.has(meta.id)) continue;
+				const isNew = cache.sessions[meta.id] === void 0;
 				const state = cache.sessions[meta.id] ?? createUsageState();
 				const revision = revisionOf.get(meta.id);
 				const changed = state.kind !== "persisted" || revision !== void 0 && revision !== state.revision || revision === void 0;
@@ -603,6 +619,7 @@ export async function collectUsage(ctx) {
 							state.lastSample = null;
 							state.currentModel = null;
 							state.consumed = 0;
+							dirty = true;
 						}
 						const fresh = wasPersisted ? events.filter((event) => event.seq > (state.consumed ?? 0)) : events;
 						const contiguous = fresh.length === 0 ? state.consumed === 0 : fresh[0].seq === state.consumed + 1;
@@ -617,21 +634,30 @@ export async function collectUsage(ctx) {
 							const allEvents = await readStoredEvents(persistence, meta.id, 0);
 							applyUsageDelta(state, allEvents);
 							state.consumed = allEvents.length > 0 ? allEvents[allEvents.length - 1].seq : 0;
+							dirty = true;
 						} else if (fresh.length > 0) {
 							applyUsageDelta(state, fresh);
 							state.consumed = fresh[fresh.length - 1].seq;
+							dirty = true;
 						}
 						state.kind = "persisted";
-						if (revision !== void 0) state.revision = revision;
+						if (revision !== void 0 && revision !== state.revision) {
+							state.revision = revision;
+							dirty = true;
+						}
 					} catch (error) {
 						ctx.logger.warn(`usage: reading persisted session "${meta.id}" failed: ${String(error)}`);
 					}
 				}
+				if (isNew) dirty = true;
 				cache.sessions[meta.id] = state;
 			}
 		}
 		for (const id of Object.keys(cache.sessions)) {
-			if (!attached.has(id) && !persistedIds.has(id)) delete cache.sessions[id];
+			if (!attached.has(id) && !persistedIds.has(id)) {
+				delete cache.sessions[id];
+				dirty = true;
+			}
 		}
 		const byDay = new Map();
 		const byHour = new Map();
@@ -642,8 +668,9 @@ export async function collectUsage(ctx) {
 			mergeModelHoursInto(byModelHour, state.modelHours);
 		}
 		// Keep the atomic cache write inside the single-flight section. Otherwise
-		// overlapping saves can race on the same temporary file.
-		await saveCache(ctx, cache);
+		// overlapping saves can race on the same temporary file. Skip it entirely
+		// when nothing changed so idle steady-state polling never hits the disk.
+		if (dirty) await saveCache(ctx, cache);
 		return renderUsage(byDay, byHour, byModelHour, Date.now());
 	});
 }
@@ -652,12 +679,41 @@ export async function collectUsage(ctx) {
 
 //#region route handlers
 
+/**
+ * Materialized usage snapshot with a TTL. The five-minute background refresh
+ * warms it; requests served inside the TTL skip both the incremental fold and
+ * the Claude scan entirely, so steady-state polling (the open panel polls every
+ * 60 s) costs one in-memory object return. `?refresh=1` (or the background
+ * cycle) forces a recompute. This is a serving-layer cache only — fold
+ * semantics and the persisted `usage-cache.json` are unchanged.
+ */
+let usageMemo = null;
+
+async function computeUsagePayload(ctx, deps) {
+	const [usage, claude] = await Promise.all([collectUsage(ctx), collectClaude(ctx.logger, deps)]);
+	return { ok: true, ...usage, claude };
+}
+
+async function usagePayload(ctx, { force = false, deps = {} } = {}) {
+	const now = deps.now ?? Date.now;
+	const ttl = deps.usageTtlMs ?? REFRESH_MS;
+	if (!force && usageMemo !== null && now() - usageMemo.at < ttl) return usageMemo.payload;
+	const payload = await computeUsagePayload(ctx, deps);
+	usageMemo = { payload, at: now() };
+	return payload;
+}
+
+/** Test seam: drop the materialized snapshot so the next call recomputes. */
+export function resetUsageMemo() {
+	usageMemo = null;
+}
+
 async function handleUsage(ctx, req, res, deps = {}) {
 	if (rejectForeignCaller(req, res)) return;
 	try {
-		const result = await collectUsage(ctx);
-		const claude = await collectClaude(ctx.logger, deps);
-		json(res, 200, { ok: true, ...result, claude });
+		const url = new URL(req.url ?? "/", "http://x");
+		const force = url.searchParams.get("refresh") === "1";
+		json(res, 200, await usagePayload(ctx, { force, deps }));
 	} catch (error) {
 		ctx.logger.warn(`usage: usage aggregation failed: ${String(error)}`);
 		json(res, 500, { ok: false, error: "internal", message: error instanceof Error ? error.message : String(error) });
@@ -713,7 +769,7 @@ export function startBackgroundRefresh(ctx, service, deps = {}) {
 		if (running || stopped) return;
 		running = true;
 		active = (async () => {
-			const results = await Promise.allSettled([service.refreshAll(), collectUsage(ctx), collectClaude(ctx.logger, deps)]);
+			const results = await Promise.allSettled([service.refreshAll(), usagePayload(ctx, { force: true, deps })]);
 			for (const result of results) if (result.status === "rejected") ctx.logger.warn(`usage: background refresh failed: ${String(result.reason)}`);
 		})().finally(() => {
 			running = false;
@@ -757,6 +813,7 @@ const Config = {
  * @param deps - test seams: {service, disableBackgroundRefresh, intervalMs, setInterval, clearInterval, lookup, transport, fetchImpl}.
  */
 async function apply(ctx, rawConfig = {}, deps = {}) {
+	resetUsageMemo();
 	const service = deps.service ?? createBalanceService({
 		credentials: ctx.get("credentials") ?? ctx.credentials,
 		getProviders: () => configuredProviders(ctx),

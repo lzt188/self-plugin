@@ -7,11 +7,11 @@
  */
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { apply, BALANCE_PATH, PROVIDERS_PATH, USAGE_PATH, isLoopbackAddress } from "../lib/index.js";
+import { apply, BALANCE_PATH, PROVIDERS_PATH, resetUsageMemo, USAGE_PATH, isLoopbackAddress } from "../lib/index.js";
 import { isPrivateAddress, safeFetch } from "../lib/safe-fetch.js";
 import { resetClaudeState } from "../lib/claude.js";
 
@@ -72,6 +72,7 @@ const publicLookup = async () => [{ address: "1.2.3.4", family: 4 }];
 
 async function boot(overrides = {}) {
 	resetClaudeState();
+	resetUsageMemo();
 	const routes = [];
 	const effects = [];
 	const claudeDir = overrides.claudeDir ?? join(testHome, "no-claude-here");
@@ -304,7 +305,7 @@ await test("usage: incremental fold only processes appended events", async () =>
 	const first = await call(handler);
 	assert.equal(parsed(first).total.tokens, 150);
 	session.events.push(usageEvent(3, Date.now(), 1, 2, { inputTokens: 10, outputTokens: 5 }));
-	const second = await call(handler);
+	const second = await call(handler, { url: "/api/usage/usage?refresh=1" });
 	assert.equal(parsed(second).total.tokens, 165);
 });
 
@@ -382,7 +383,7 @@ await test("usage: incremental live fold appends without double counting", async
 	const handler = handlerOf(routes, USAGE_PATH);
 	assert.equal(parsed(await call(handler)).total.tokens, 150);
 	events.push(v2Message(2, Date.now(), 1, 2, { inputTokens: 10, outputTokens: 5 }));
-	assert.equal(parsed(await call(handler)).total.tokens, 165);
+	assert.equal(parsed(await call(handler, { url: "/api/usage/usage?refresh=1" })).total.tokens, 165);
 });
 
 await test("usage: persisted sessions fold via list() snapshots and read handles", async () => {
@@ -414,7 +415,7 @@ await test("usage: persisted sessions fold via list() snapshots and read handles
 	assert.deepEqual(opened, ["test-persisted-v2"]);
 	assert.deepEqual(closed, ["test-persisted-v2"], "every opened read handle is closed");
 	// An unchanged revision must short-circuit the second read entirely.
-	await call(handler);
+	await call(handler, { url: "/api/usage/usage?refresh=1" });
 	assert.deepEqual(opened, ["test-persisted-v2"], "same revision re-reads nothing");
 	// A new revision folds only the appended tail.
 	events.push(v2Message(2, Date.now(), 1, 2, { inputTokens: 5, outputTokens: 5 }));
@@ -446,6 +447,74 @@ await test("usage: claude channel folds JSONL usage into the dual view", async (
 	assert.equal(body.claude.total.tokens, 40);
 	assert.equal(body.claude.days.length, 1);
 	assert.equal(body.claude.days[0].hours.length, 24);
+});
+
+//#endregion
+
+//#region usage endpoint — optimization regressions (P0/P1/P2)
+//
+// These pin the serving-layer fixes: the persisted listing must prefer the
+// revision-carrying `listSnapshots()` face (P0), the endpoint must serve a TTL
+// snapshot unless forced (P1), and a no-change collect must not rewrite the
+// cache file (P2). Each relies on `boot()` resetting the usage memo.
+
+await test("usage: persisted listing prefers listSnapshots (bare list has no revision)", async () => {
+	const now = Date.now();
+	const events = [v2Header(0, now), v2Message(1, now, 1, 1, { inputTokens: 40, outputTokens: 20 })];
+	let reads = 0;
+	const persistence = {
+		// Real JSONL backend: `list()` returns BARE headers (no revision)…
+		list: async () => [{ version: 2, id: "test-prefers-snapshots", createdAt: now, isSeeded: false }],
+		// …while `listSnapshots()` carries the stat-derived revision.
+		listSnapshots: async () => [{ header: { version: 2, id: "test-prefers-snapshots", createdAt: now, isSeeded: false }, revision: "rev-a" }],
+		readFrom: async (id, fromSeq) => {
+			reads += 1;
+			return { events: events.slice(fromSeq) };
+		}
+	};
+	const { routes } = await boot({ persistence });
+	const handler = handlerOf(routes, USAGE_PATH);
+	assert.equal(parsed(await call(handler, { url: "/api/usage/usage?refresh=1" })).total.tokens, 60);
+	assert.equal(reads, 1, "first fold reads the new session once");
+	// Forced recompute must NOT re-read: the revision short-circuit only works
+	// if listSnapshots() was chosen (bare list() would yield revision=undefined).
+	assert.equal(parsed(await call(handler, { url: "/api/usage/usage?refresh=1" })).total.tokens, 60);
+	assert.equal(reads, 1, "unchanged revision re-reads nothing (proves listSnapshots preference)");
+});
+
+await test("usage: endpoint serves the TTL snapshot unless refresh=1 forces a recompute", async () => {
+	const now = Date.now();
+	const events = [v2Header(0, now), v2Message(1, now, 1, 1, { inputTokens: 100, outputTokens: 50 })];
+	const session = liveSession("test-memo-serving", events);
+	const { routes } = await boot({ sessions: { list: () => [session] } });
+	const handler = handlerOf(routes, USAGE_PATH);
+	assert.equal(parsed(await call(handler)).total.tokens, 150, "cold compute populates the snapshot");
+	// A new event lands, but the default (unforced) request is served from the
+	// snapshot taken moments ago, so the fold + disk work is skipped entirely.
+	events.push(v2Message(2, Date.now(), 1, 2, { inputTokens: 10, outputTokens: 5 }));
+	assert.equal(parsed(await call(handler)).total.tokens, 150, "within TTL the snapshot is served unchanged");
+	assert.equal(parsed(await call(handler, { url: "/api/usage/usage?refresh=1" })).total.tokens, 165, "refresh=1 forces a recompute");
+});
+
+await test("usage: a no-change forced collect does not rewrite the cache file", async () => {
+	const now = Date.now();
+	const events = [v2Header(0, now), v2Message(1, now, 1, 1, { inputTokens: 40, outputTokens: 20 })];
+	const persistence = {
+		listSnapshots: async () => [{ header: { version: 2, id: "test-dirty-save", createdAt: now, isSeeded: false }, revision: "rev-x" }],
+		readFrom: async (id, fromSeq) => ({ events: events.slice(fromSeq) })
+	};
+	const { routes } = await boot({ sessions: { list: () => [] }, persistence });
+	const handler = handlerOf(routes, USAGE_PATH);
+	assert.equal(parsed(await call(handler, { url: "/api/usage/usage?refresh=1" })).total.tokens, 60, "first fold is dirty and persists");
+	const file = join(testHome, "storages", "usage-cache.json");
+	const saved = JSON.parse(await readFile(file, "utf8"));
+	assert.ok(saved.sessions["test-dirty-save"] !== void 0, "session persisted after the dirty fold");
+	// Overwrite the on-disk cache with a sentinel. A no-change collect must not
+	// touch it; a dirty collect would serialize over it.
+	const CANARY = "{\"sentinel\":true}";
+	writeFileSync(file, CANARY, "utf8");
+	assert.equal(parsed(await call(handler, { url: "/api/usage/usage?refresh=1" })).total.tokens, 60);
+	assert.equal(await readFile(file, "utf8"), CANARY, "unchanged state skips the cache write");
 });
 
 //#endregion

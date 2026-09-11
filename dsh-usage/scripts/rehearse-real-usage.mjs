@@ -50,11 +50,15 @@ const sessions = new Map()
 async function walk(dir) {
   for (const entry of await readdir(dir, { withFileTypes: true })) {
     if (entry.isDirectory()) { await walk(join(dir, entry.name)); continue }
-    if (!/^session\.v\d+\.jsonl(\.zstd)?$/.test(entry.name)) continue
-    const id = entry.name.replace(/^session\./, '').replace(/\.jsonl(\.zstd)?$/, '')
+    if (!entry.isFile() || !/^session(\.v\d+)?\.jsonl(\.zstd)?$/.test(entry.name)) continue
+    // Current on-disk layout: <project-slug>/<session-id-dir>/session.jsonl[.zstd];
+    // older layout inlined the versioned name. Derive the id accordingly.
+    const id = entry.name === 'session.jsonl' || entry.name === 'session.jsonl.zstd'
+      ? dir.split(/[\\/]/).pop().replace(/^session-/, '')
+      : entry.name.replace(/^session\./, '').replace(/\.jsonl(\.zstd)?$/, '')
     const records = await decodeLog(join(dir, entry.name))
     // Re-key to logical seq: the header line is not an event.
-    sessions.set(dir.split(/[\\/]/).pop() + '/' + (records[0]?.id ?? id), records.map((r, i) => ({ ...r, seq: i })))
+    sessions.set(id, records.map((r, i) => ({ ...r, seq: i })))
   }
 }
 await walk(root)
