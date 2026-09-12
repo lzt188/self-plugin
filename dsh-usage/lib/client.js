@@ -27,25 +27,7 @@ window.__ModuleLoader__.load({
 
 		const NS = "dsh-usage";
 
-// 更新检查：直连 GitHub Releases API 比对版本（只读；策略与 dsh-worktable 一致）
-const LOCAL_VERSION = "0.2.1";
-const UPDATE_REPO = "Aisland-SJL/dsh-usage";
-const UPGRADE_CMD = "dsh plugin --profile web update dsh-usage";
-const UPGRADE_AI = "帮我升级 dsh-usage：执行 " + UPGRADE_CMD + "，完成后提醒我重启 dsh web 并刷新页面";
-const UPDATE_CHECK_KEY = "dsh-usage:updateCheck.v1";
-const UPDATE_LAST_KEY = "dsh-usage:lastUpdateCheck.v1";
-const UPDATE_SKIP_KEY = "dsh-usage:skipVersion.v1";
 
-/** 语义化版本比较：a>b → 1，a<b → -1，相等 → 0（自动去掉前导 v）。 */
-function cmpVer(a, b) {
-	const pa = String(a).replace(/^v/, "").split(".").map((n) => parseInt(n, 10) || 0);
-	const pb = String(b).replace(/^v/, "").split(".").map((n) => parseInt(n, 10) || 0);
-	for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-		const d = (pa[i] || 0) - (pb[i] || 0);
-		if (d !== 0) return d > 0 ? 1 : -1;
-	}
-	return 0;
-}
 
 		//#region heat geometry
 		/**
@@ -95,26 +77,7 @@ function cmpVer(a, b) {
 			".u_dockHeatmapPop{position:absolute;top:8px;right:88px;display:flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-tertiary);cursor:pointer;padding:0}",
 			".u_dockHeatmapPop:hover{color:var(--u-accent,#1f6feb)}",
 			".u_dockHeatmapPop[data-active]{color:var(--u-accent,#1f6feb);background:color-mix(in srgb,var(--u-accent,#1f6feb) 12%,transparent)}",
-		// update notification（琥珀呼吸圆点 + 更新卡 + 版本行）
-		".u_updateDot{position:absolute;top:-3px;right:-3px;width:9px;height:9px;border-radius:50%;background:#f5b942;box-shadow:0 0 6px rgba(245,185,66,.8);animation:u_updatePulse 1.8s ease-in-out infinite}",
-		"@keyframes u_updatePulse{0%,100%{opacity:.5;transform:scale(.8)}50%{opacity:1;transform:scale(1.15)}}",
-		".u_updateCard{flex:none;margin:10px 0 0;padding:10px;border:1px solid rgba(245,185,66,.45);border-radius:10px;background:rgba(245,185,66,.08);display:flex;flex-direction:column;gap:8px}",
-		".u_updateTitle{color:var(--dsw-alias-label-primary);font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:8px}",
-		".u_updateLink{color:var(--u-accent,#1f6feb);text-decoration:none;font-size:11px}",
-		".u_updateNotes{color:var(--dsw-alias-label-secondary);font-size:11px;line-height:16px;max-height:72px;overflow:hidden;margin:0}",
-		".u_updateRow{display:flex;gap:6px;align-items:center;flex-wrap:wrap}",
-		".u_updateBtn{display:inline-flex;align-items:center;gap:5px;padding:5px 8px;border-radius:7px;border:1px solid var(--dsw-alias-border-l1);background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:11.5px;cursor:pointer}",
-		".u_updateBtn:hover{background:var(--dsw-alias-fill-l1)}",
-		".u_updateBtn:disabled{opacity:.5;cursor:default}",
-		".u_updateCmd{margin:0;padding:5px 7px;background:var(--dsw-alias-bg-base);border:1px solid var(--dsw-alias-border-l1);border-radius:6px;color:var(--dsw-alias-label-secondary);font:12px/16px ui-monospace,Consolas,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
-		".u_versionRow{flex:none;display:flex;align-items:center;gap:8px;justify-content:space-between;margin-top:10px;padding:5px 0;border-top:1px solid var(--dsw-alias-border-l1)}",
-		".u_versionLabel{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:14px}",
-		".u_versionActions{display:flex;align-items:center;gap:8px}",
-		".u_updateToggle{display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none}",
-		".u_switch{position:relative;width:26px;height:14px;border-radius:999px;background:var(--dsw-alias-state-accent-primary,#1f6feb);cursor:pointer;border:none;padding:0;flex:none}",
-		".u_switch::after{content:'';position:absolute;top:2px;right:2px;width:10px;height:10px;border-radius:50%;background:#fff;transition:right .15s}",
-		".u_switch[data-off=true]{background:var(--dsw-alias-border-l1)}",
-		".u_switch[data-off=true]::after{right:14px}",
+
 			".u_dockGrip{position:absolute;top:8px;left:10px;display:flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:5px;border:none;background:0 0;color:var(--dsw-alias-label-tertiary);cursor:grab;padding:0;touch-action:none}",
 			".u_dockGrip:hover{color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-interactive-bg-hover)}",
 			".u_dockGrip:active{cursor:grabbing}",
@@ -828,14 +791,6 @@ function cmpVer(a, b) {
 		const zh = {
 			"panel.title": "用量 / 余额",
 			"panel.updatedAt": "更新于 {time}",
-			"update.new": "新版本 v{version}",
-			"update.copyAi": "复制 AI 提示词",
-			"update.copied": "已复制",
-			"update.ignore": "忽略此版本",
-			"update.check": "立即检查",
-			"update.checking": "检查中…",
-			"update.failed": "检查未成功",
-			"update.auto": "自动检查更新",
 			"action.refresh": "刷新",
 			"action.usagePop": "用量",
 			"action.usageListPop": "用量记录",
@@ -929,14 +884,6 @@ function cmpVer(a, b) {
 		const en = {
 			"panel.title": "Usage / Balance",
 			"panel.updatedAt": "Updated at {time}",
-			"update.new": "New version v{version}",
-			"update.copyAi": "Copy AI prompt",
-			"update.copied": "Copied",
-			"update.ignore": "Ignore this version",
-			"update.check": "Check now",
-			"update.checking": "Checking…",
-			"update.failed": "Check failed",
-			"update.auto": "Auto-check updates",
 			"action.refresh": "Refresh",
 			"action.usagePop": "Usage",
 			"action.usageListPop": "Usage log",
@@ -1731,72 +1678,9 @@ function cmpVer(a, b) {
 			const [usageError, setUsageError] = react.useState(null);
 			const [selectedDay, setSelectedDay] = react.useState(null);
 			const [refreshedAt, setRefreshedAt] = react.useState(null);
-			// 更新检查状态
-			const [updateInfo, setUpdateInfo] = react.useState(null);
-			const [updateStatus, setUpdateStatus] = react.useState("idle");
-			const [updateCopied, setUpdateCopied] = react.useState(false);
-			const updateCheckingRef = react.useRef(false);
-			const updateAliveRef = react.useRef(true);
-			const [updateCheckOn, setUpdateCheckOn] = react.useState(() => {
-				try { return localStorage.getItem(UPDATE_CHECK_KEY) !== "0"; } catch { return true; }
-			});
 			// Heatmap month paging: 0 = the current month, −1 = last month… Reset
 			// to "this month" whenever the heatmap popup closes.
 			const [heatMonthOffset, setHeatMonthOffset] = react.useState(0);
-			const checkUpdates = react.useCallback((force) => {
-				if (updateCheckingRef.current) return;
-				const last = Number((() => { try { return localStorage.getItem(UPDATE_LAST_KEY) ?? "0"; } catch { return "0"; } })());
-				if (!force && Date.now() - last < 24 * 3600 * 1000) return;
-				updateCheckingRef.current = true;
-				setUpdateStatus("checking");
-				void (async () => {
-					let data = null;
-					for (let attempt = 0; attempt < 3 && !data && updateAliveRef.current; attempt++) {
-						const ctrl = new AbortController();
-						const timer = setTimeout(() => ctrl.abort(), 8000);
-						try {
-							const res = await fetch("https://api.github.com/repos/" + UPDATE_REPO + "/releases/latest", { headers: { Accept: "application/vnd.github+json" }, cache: "no-store", signal: ctrl.signal });
-							if (res.ok) data = await res.json();
-							else if (res.status === 403 || res.status === 404) break;
-						} catch { /* 网络抖动：下一轮重试 */ }
-						finally { clearTimeout(timer); }
-					}
-					updateCheckingRef.current = false;
-					if (!updateAliveRef.current) return;
-					if (!data) { setUpdateStatus("failed"); return; }
-					try { localStorage.setItem(UPDATE_LAST_KEY, String(Date.now())); } catch {}
-					const tag = String(data.tag_name ?? "").replace(/^v/, "");
-					if (!tag || cmpVer(tag, LOCAL_VERSION) <= 0) { setUpdateStatus("uptodate"); return; }
-					let skipped = null; try { skipped = localStorage.getItem(UPDATE_SKIP_KEY); } catch {}
-					if (skipped === tag) { setUpdateStatus("uptodate"); return; }
-					setUpdateInfo({ latest: tag, notes: String(data.body ?? "").slice(0, 600), url: String(data.html_url ?? "") });
-					setUpdateStatus("uptodate");
-				})();
-			}, []);
-			react.useEffect(() => {
-				updateAliveRef.current = true;
-				if (updateCheckOn) void checkUpdates(false);
-				return () => { updateAliveRef.current = false; };
-			}, [updateCheckOn, checkUpdates]);
-			const copyUpgradeAi = () => {
-				const mark = () => { setUpdateCopied(true); setTimeout(() => setUpdateCopied(false), 2200); };
-				try {
-					if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(UPGRADE_AI).then(mark, mark);
-					else mark();
-				} catch { mark(); }
-			};
-			const skipUpdate = () => {
-				if (updateInfo !== null) {
-					try { localStorage.setItem(UPDATE_SKIP_KEY, updateInfo.latest); } catch {}
-					setUpdateInfo(null);
-				}
-			};
-			const toggleUpdateCheck = () => {
-				setUpdateCheckOn((value) => {
-					try { localStorage.setItem(UPDATE_CHECK_KEY, value ? "0" : "1"); } catch {}
-					return !value;
-				});
-			};
 			const mountedRef = react.useRef(true);
 			const usageLoaderRef = react.useRef(null);
 			const accountLoaderRef = react.useRef(null);
@@ -2971,59 +2855,6 @@ function cmpVer(a, b) {
 				time: new Date(refreshedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
 			});
 
-			// 更新检查：更新卡（发现新版时显示）+ 版本行（恒显）
-			const updateCard = updateInfo === null ? null : react_jsx_runtime.jsxs("div", {
-				className: "u_updateCard",
-				children: [
-					react_jsx_runtime.jsxs("div", {
-						className: "u_updateTitle",
-						children: [
-							translate("update.new", { version: updateInfo.latest }),
-							updateInfo.url !== "" && react_jsx_runtime.jsx("a", { className: "u_updateLink", href: updateInfo.url, target: "_blank", rel: "noreferrer", children: "→" })
-						]
-					}),
-					updateInfo.notes !== "" && react_jsx_runtime.jsx("p", { className: "u_updateNotes", children: updateInfo.notes }),
-					react_jsx_runtime.jsxs("div", {
-						className: "u_updateRow",
-						children: [
-							react_jsx_runtime.jsx("button", { type: "button", className: "u_updateBtn", onClick: copyUpgradeAi, children: updateCopied ? translate("update.copied") : translate("update.copyAi") }),
-							react_jsx_runtime.jsx("button", { type: "button", className: "u_updateBtn", onClick: skipUpdate, children: translate("update.ignore") })
-						]
-					}),
-					react_jsx_runtime.jsx("p", { className: "u_updateCmd", children: UPGRADE_CMD })
-				]
-			});
-
-			const versionRow = react_jsx_runtime.jsxs("div", {
-				className: "u_versionRow",
-				children: [
-					react_jsx_runtime.jsx("span", {
-						className: "u_versionLabel",
-						children: "dsh-usage v" + LOCAL_VERSION + (updateStatus === "uptodate" && updateInfo === null ? " · " + translate("update.uptodate") : updateStatus === "failed" && updateInfo === null ? " · " + translate("update.failed") : "")
-					}),
-					react_jsx_runtime.jsxs("span", {
-						className: "u_versionActions",
-						children: [
-							react_jsx_runtime.jsx("button", {
-								type: "button",
-								className: "u_updateBtn",
-								disabled: updateStatus === "checking",
-								onClick: () => void checkUpdates(true),
-								children: updateStatus === "checking" ? translate("update.checking") : translate("update.check")
-							}),
-							react_jsx_runtime.jsxs("span", {
-								className: "u_updateToggle",
-								onClick: toggleUpdateCheck,
-								children: [
-									react_jsx_runtime.jsx("span", { className: "u_versionLabel", children: translate("update.auto") }),
-									react_jsx_runtime.jsx("span", { className: "u_switch", "data-off": updateCheckOn ? void 0 : "true" })
-								]
-							})
-						]
-					})
-				]
-			});
-
 			// Floating dock: one framed container, divider rows, gear in the corner.
 			const pinnedIds = visibleIds.filter((id) => settings.widgets[id]?.pinned === true && WIDGET_PINABLE[id] !== false);
 
@@ -3119,12 +2950,7 @@ function cmpVer(a, b) {
 								}
 								openPanel(null);
 							},
-							children: react_jsx_runtime.jsxs(react_jsx_runtime.Fragment, {
-								children: [
-									react_jsx_runtime.jsx(primitives.IconSettingsOutline14, { size: 12 }),
-									updateInfo !== null && react_jsx_runtime.jsx("span", { className: "u_updateDot", "aria-hidden": true })
-								]
-							})
+							children: react_jsx_runtime.jsx(primitives.IconSettingsOutline14, { size: 12 })
 						})
 					]
 				})
@@ -3371,8 +3197,7 @@ function cmpVer(a, b) {
 					react_jsx_runtime.jsxs("div", {
 						className: "u_body",
 						children: [
-							updateCard,
-							usageError !== null && react_jsx_runtime.jsxs("div", {
+						usageError !== null && react_jsx_runtime.jsxs("div", {
 								className: "u_error",
 								children: [
 									react_jsx_runtime.jsx("span", { children: usageError }),
@@ -3486,7 +3311,6 @@ function cmpVer(a, b) {
 								]
 							}),
 							updatedLabel !== "" && react_jsx_runtime.jsx("p", { className: "u_footerNote", children: updatedLabel }),
-						versionRow
 						]
 					})
 				]

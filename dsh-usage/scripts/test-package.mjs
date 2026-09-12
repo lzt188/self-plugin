@@ -23,10 +23,5 @@ assert.ok(
 	client.includes(`require("${runtimePackage}")`),
 	"package contract test must track the real client import"
 );
-{
-	const m = client.match(/const LOCAL_VERSION = "([^"]+)"/);
-	assert.ok(m, "client.js must declare LOCAL_VERSION");
-	assert.equal(m[1], pkg.version, "LOCAL_VERSION must match package.json version");
-}
 
 console.log("ok package declares and injects client UI runtime dependency");
