@@ -131,6 +131,19 @@ export function rejectForeignCaller(req, res) {
 
 //#region balance service
 
+/**
+ * Map a thrown balance error onto the provider-status vocabulary the client
+ * already renders. `queryBalance`/`safeFetch` set `providerStatus` for policy
+ * and HTTP failures; a timeout or abort carries none, so it is reported as
+ * `timeout` rather than being flattened into the generic `unavailable`.
+ */
+export function statusOfBalanceError(error) {
+	const providerStatus = error?.providerStatus;
+	if (typeof providerStatus === "string" && providerStatus !== "") return providerStatus;
+	if (error?.name === "TimeoutError" || error?.name === "AbortError") return "timeout";
+	return "unavailable";
+}
+
 /** Resolve a credential reference through the harness credentials seam. */
 async function resolveCredential(credentials, ref) {
 	if (typeof ref !== "string" || ref === "") return "";
@@ -233,7 +246,10 @@ export function createBalanceService({ credentials, getProviders, deps = {} }) {
 				account.balance = await queryBalance(scheme, provider.baseURL, apiKey, deps.timeoutMs ?? UPSTREAM_TIMEOUT_MS, fetchImpl);
 				account.status = "ok";
 			} catch (error) {
-				account.status = error?.providerStatus ?? (error?.name === "TimeoutError" || error?.name === "AbortError" ? "unavailable" : "unavailable");
+				// A timeout has no upstream HTTP status, so `providerStatus` is
+				// absent; report it as its own state instead of collapsing every
+				// failure into "unavailable" and hiding a hanging provider.
+				account.status = statusOfBalanceError(error);
 				account.error = error instanceof Error ? error.message : String(error);
 			}
 			return account;
@@ -453,6 +469,39 @@ async function loadCache() {
 	return loadedCache;
 }
 
+/**
+ * Cache persistence is throttled: a dirty fold only forces a disk write when at
+ * least `SAVE_MIN_INTERVAL_MS` has elapsed since the last write. During active
+ * use (events streaming into a live session every few seconds) this bounds the
+ * full-file rewrites to a handful per minute instead of one per poll, while the
+ * in-memory fold state — the source of truth for the running process — stays
+ * authoritative. A trailing timer guarantees the latest in-memory state is
+ * eventually flushed even if dirty scans stop; a crash inside the window only
+ * costs a re-fold on next start, which is already correct.
+ */
+const SAVE_MIN_INTERVAL_MS = 30000;
+let lastSaveAt = 0;
+let saveTimer = null;
+
+function flushSave(ctx, cache) {
+	lastSaveAt = Date.now();
+	return saveCache(ctx, cache);
+}
+
+/** Schedule a cache write, coalescing bursts into at most one write per interval. */
+function scheduleSave(ctx, cache) {
+	const since = Date.now() - lastSaveAt;
+	if (since >= SAVE_MIN_INTERVAL_MS) return flushSave(ctx, cache);
+	if (saveTimer === null) {
+		saveTimer = setTimeout(() => {
+			saveTimer = null;
+			void flushSave(ctx, cache);
+		}, SAVE_MIN_INTERVAL_MS - since);
+		saveTimer.unref?.();
+	}
+	return void 0;
+}
+
 /** Persist the cache atomically (temp + rename); failures are logged, never fatal. */
 async function saveCache(ctx, cache) {
 	try {
@@ -495,9 +544,15 @@ function liveEventsFrom(session, fromSeq) {
 
 /**
  * Enumerate stored sessions as `{ header, revision }` pairs, or null when the
- * backend offers no usable listing. `list()` is the current contract and
- * returns snapshots (`{ header, revision, … }`); `listSnapshots()` and a bare
- * header from `list()` are tolerated as older shapes and normalized here.
+ * backend offers no usable listing. `listSnapshots()` is the current contract
+ * and returns snapshots (`{ header, revision, … }`); a bare header from
+ * `list()` is tolerated as an older shape and normalized here.
+ *
+ * A listing that carries NO revision at all is the dangerous case: every
+ * session would look changed on every request and be re-read in full (~16 s
+ * against a real 37 MiB log set). That regression is silent by nature, so it
+ * is reported once through `logger.warn` — a degraded backend stays
+ * observable instead of turning into an invisible stall.
  */
 async function storedSnapshots(persistence, logger) {
 	// Prefer `listSnapshots()`: it is the ONLY face that carries the
@@ -507,7 +562,8 @@ async function storedSnapshots(persistence, logger) {
 	// re-read in full on every request. `list()` is only a fallback for
 	// backends that predate `listSnapshots()` or that (per the older seam
 	// contract) already return `{ header, revision }` snapshots from `list()`.
-	const list = typeof persistence.listSnapshots === "function" ? () => persistence.listSnapshots()
+	const viaSnapshots = typeof persistence.listSnapshots === "function";
+	const list = viaSnapshots ? () => persistence.listSnapshots()
 		: typeof persistence.list === "function" ? () => persistence.list()
 		: null;
 	if (list === null) return null;
@@ -528,7 +584,38 @@ async function storedSnapshots(persistence, logger) {
 		if (typeof header.id !== "string" || header.id === "") continue;
 		normalized.push({ header, revision: isSnapshot ? entry.revision : void 0 });
 	}
+	// Warn once per process: this is a contract regression, not a per-request
+	// condition, and a warning per request would flood the log on the very
+	// path that is already pathological.
+	if (!viaSnapshots && normalized.length > 0 && normalized.every((entry) => entry.revision === void 0) && !revisionlessListingWarned) {
+		revisionlessListingWarned = true;
+		logger.warn("usage: sessionPersistence exposes no revision (listSnapshots is missing); every persisted session must be re-read on every request — this is ~1000x slower");
+	}
 	return normalized;
+}
+
+/** One-shot latch so the revision-less-listing warning is logged only once. */
+let revisionlessListingWarned = false;
+
+/**
+ * Recover a per-session revision when the primary listing carries none.
+ *
+ * The `SessionHeader` itself holds no size/mtime (only `createdAt`), so a
+ * header-only listing genuinely cannot tell "unchanged" from "changed". The
+ * cheap fix is the backend's own stat-only revision hook: `readStoredRevision`
+ * reads no event bytes, so N stats cost far less than one full-log parse.
+ * Returns undefined when no such hook exists, which deliberately preserves the
+ * old (always-re-read) behaviour instead of silently skipping updates.
+ */
+async function revisionViaStat(persistence, id) {
+	if (typeof persistence.readStoredRevision !== "function") return void 0;
+	try {
+		const revision = await persistence.readStoredRevision(id);
+		return typeof revision === "string" ? revision : void 0;
+	} catch {
+		// A failed stat must never skip an update: fall through to a full read.
+		return void 0;
+	}
 }
 
 /**
@@ -600,13 +687,27 @@ export async function collectUsage(ctx) {
 			const metas = snapshots ?? [];
 			const revisionOf = new Map();
 			for (const entry of metas) revisionOf.set(entry.header.id, entry.revision);
-			for (const { header: meta } of metas) {
+			// Fold persisted sessions under bounded concurrency so a cold cache
+			// with many/huge logs can't monopolize the event loop (or the disk)
+			// at boot. Batches yield between them; each session's fold stays
+			// correct and complete.
+			const SCAN_CONCURRENCY = 8;
+			for (let si = 0; si < metas.length; si += SCAN_CONCURRENCY) {
+				const batch = metas.slice(si, si + SCAN_CONCURRENCY);
+				await Promise.all(batch.map(async ({ header: meta }) => {
 				persistedIds.add(meta.id);
-				if (attached.has(meta.id)) continue;
+				if (attached.has(meta.id)) return;
 				const isNew = cache.sessions[meta.id] === void 0;
 				const state = cache.sessions[meta.id] ?? createUsageState();
-				const revision = revisionOf.get(meta.id);
-				const changed = state.kind !== "persisted" || revision !== void 0 && revision !== state.revision || revision === void 0;
+				const listed = revisionOf.get(meta.id);
+				// A revision-less listing (`list()` on the current JSONL backend)
+				// cannot tell "unchanged" from "changed" from the header alone.
+				// Recover the stat-only revision instead of re-reading every log:
+				// correct either way, but ~16 s cheaper against real data.
+				const revision = listed !== void 0 ? listed : await revisionViaStat(persistence, meta.id);
+				const changed = state.kind !== "persisted"
+					|| revision !== void 0 && revision !== state.revision
+					|| revision === void 0;
 				if (changed) {
 					try {
 						const wasPersisted = state.kind === "persisted";
@@ -621,10 +722,14 @@ export async function collectUsage(ctx) {
 							state.consumed = 0;
 							dirty = true;
 						}
-						const fresh = wasPersisted ? events.filter((event) => event.seq > (state.consumed ?? 0)) : events;
-						const contiguous = fresh.length === 0 ? state.consumed === 0 : fresh[0].seq === state.consumed + 1;
-						if (!contiguous && state.consumed > 0) {
-							// Log truncated or rewritten: refold the whole log.
+						// A seq-less log cannot drive the incremental cursor
+						// (event.seq is the only key for suffix reads and replace
+						// semantics). Reset and fold the whole log from 0, keeping
+						// consumed at 0 so the next changed pass re-reads from the
+						// start. This stays correct — it never silently freezes on a
+						// stale snapshot the way the old code did when seq was absent.
+						const hasSeq = events.every((event) => typeof event.seq === "number");
+						if (!hasSeq) {
 							state.days = new Map();
 							state.hours = new Map();
 							state.modelHours = new Map();
@@ -633,12 +738,36 @@ export async function collectUsage(ctx) {
 							state.consumed = 0;
 							const allEvents = await readStoredEvents(persistence, meta.id, 0);
 							applyUsageDelta(state, allEvents);
-							state.consumed = allEvents.length > 0 ? allEvents[allEvents.length - 1].seq : 0;
 							dirty = true;
-						} else if (fresh.length > 0) {
-							applyUsageDelta(state, fresh);
-							state.consumed = fresh[fresh.length - 1].seq;
+						} else if (!wasPersisted) {
+							state.days = new Map();
+							state.hours = new Map();
+							state.modelHours = new Map();
+							state.lastSample = null;
+							state.currentModel = null;
+							state.consumed = 0;
 							dirty = true;
+						}
+						if (hasSeq) {
+							const fresh = wasPersisted ? events.filter((event) => event.seq > (state.consumed ?? 0)) : events;
+							const contiguous = fresh.length === 0 ? state.consumed === 0 : fresh[0].seq === state.consumed + 1;
+							if (!contiguous && state.consumed > 0) {
+								// Log truncated or rewritten: refold the whole log.
+								state.days = new Map();
+								state.hours = new Map();
+								state.modelHours = new Map();
+								state.lastSample = null;
+								state.currentModel = null;
+								state.consumed = 0;
+								const allEvents = await readStoredEvents(persistence, meta.id, 0);
+								applyUsageDelta(state, allEvents);
+								state.consumed = allEvents.length > 0 ? allEvents[allEvents.length - 1].seq : 0;
+								dirty = true;
+							} else if (fresh.length > 0) {
+								applyUsageDelta(state, fresh);
+								state.consumed = fresh[fresh.length - 1].seq;
+								dirty = true;
+							}
 						}
 						state.kind = "persisted";
 						if (revision !== void 0 && revision !== state.revision) {
@@ -651,6 +780,8 @@ export async function collectUsage(ctx) {
 				}
 				if (isNew) dirty = true;
 				cache.sessions[meta.id] = state;
+				}));
+				await new Promise((resolve) => setImmediate(resolve));
 			}
 		}
 		for (const id of Object.keys(cache.sessions)) {
@@ -670,7 +801,7 @@ export async function collectUsage(ctx) {
 		// Keep the atomic cache write inside the single-flight section. Otherwise
 		// overlapping saves can race on the same temporary file. Skip it entirely
 		// when nothing changed so idle steady-state polling never hits the disk.
-		if (dirty) await saveCache(ctx, cache);
+		if (dirty) await scheduleSave(ctx, cache);
 		return renderUsage(byDay, byHour, byModelHour, Date.now());
 	});
 }
@@ -708,6 +839,12 @@ export function resetUsageMemo() {
 	usageMemo = null;
 	loadedCache = null;
 	loadPromise = null;
+	revisionlessListingWarned = false;
+	if (saveTimer !== null) {
+		clearTimeout(saveTimer);
+		saveTimer = null;
+	}
+	lastSaveAt = 0;
 }
 
 async function handleUsage(ctx, req, res, deps = {}) {

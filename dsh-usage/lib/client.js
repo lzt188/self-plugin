@@ -552,6 +552,7 @@ function cmpVer(a, b) {
 				case "unauthorized": return translate("balance.unauthorized");
 				case "rate-limited": return translate("balance.rateLimited");
 				case "unavailable": return translate("balance.unavailableStatus");
+				case "timeout": return translate("balance.timeout");
 				case "invalid-response": return translate("balance.invalidResponse");
 				case "unsupported": return translate("balance.unsupported");
 				default: return translate("balance.loading");
@@ -899,6 +900,7 @@ function cmpVer(a, b) {
 			"balance.unauthorized": "凭据无效",
 			"balance.rateLimited": "查询被限流，稍后重试",
 			"balance.unavailableStatus": "上游不可用",
+			"balance.timeout": "查询超时",
 			"balance.invalidResponse": "上游响应异常",
 			"usage.input": "输入",
 			"usage.output": "输出",
@@ -999,6 +1001,7 @@ function cmpVer(a, b) {
 			"balance.unauthorized": "The credential is invalid.",
 			"balance.rateLimited": "Rate limited; retry later.",
 			"balance.unavailableStatus": "Upstream unavailable.",
+			"balance.timeout": "The balance query timed out.",
 			"balance.invalidResponse": "Unexpected upstream response.",
 			"usage.input": "Input",
 			"usage.output": "Output",
@@ -1509,12 +1512,12 @@ function cmpVer(a, b) {
 									] }),
 									react_jsx_runtime.jsx("span", { children: translate("usage.legend.all") })
 								]
-							}),
+							}, "all"),
 							legendGroups.map((group) => react_jsx_runtime.jsxs("div", {
 								className: "u_chartLegendGroup",
 								children: [
 								// a single provider needs no group heading
-								legendGroups.length > 1 && react_jsx_runtime.jsx("span", { className: "u_chartLegendGroupName", children: group.name }),
+								legendGroups.length > 1 && react_jsx_runtime.jsx("span", { className: "u_chartLegendGroupName", children: group.name }, "name"),
 									react_jsx_runtime.jsx("div", {
 										className: "u_chartLegendGroupItems",
 										// every legend item is a real button: clicking toggles
@@ -1537,7 +1540,7 @@ function cmpVer(a, b) {
 												]
 											}, s.key);
 										})
-									})
+									}, "items")
 								]
 							}, group.name))
 						]
