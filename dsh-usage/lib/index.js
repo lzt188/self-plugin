@@ -630,7 +630,8 @@ async function readStoredEvents(persistence, id, fromSeq) {
 	}
 	const handle = await persistence.open(id, "read");
 	try {
-		return await handle.read(fromSeq);
+		const result = await handle.read(fromSeq);
+		return Array.isArray(result) ? result : result?.events ?? [];
 	} finally {
 		await (handle.close?.() ?? Promise.resolve());
 	}
