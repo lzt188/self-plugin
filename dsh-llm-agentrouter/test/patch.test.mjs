@@ -42,7 +42,7 @@ test('the plugin row is inserted so the fence and the switch actually load', () 
 
 test('every model declares the levels the relay was probed with', () => {
   const ids = route.models.map((model) => model.id)
-  assert.deepEqual(ids, ['claude-opus-5', 'claude-opus-4-8', 'gpt-5.6-sol', 'deepseek-v4-flash', 'glm-5.3'])
+  assert.deepEqual(ids, ['claude-opus-5', 'claude-opus-4-8', 'gpt-5.6-sol', 'gpt-6-astra', 'deepseek-v4-flash'])
 
   const wire = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
   for (const model of route.models) {
@@ -61,14 +61,12 @@ test('every model declares the levels the relay was probed with', () => {
   }
 })
 
-test('a model offers Off only when the relay lets it stop thinking', () => {
-  // The relay refuses every level outside low/high/max for glm-5.3, naming the
-  // reason: the model always thinks. Withholding `off` is therefore the honest
-  // declaration — offering it would render a switch the upstream rejects.
-  const offers = new Map(route.models.map((model) => [model.id, 'off' in model.reasoningEfforts]))
-  assert.equal(offers.get('glm-5.3'), false)
-  for (const id of ['claude-opus-5', 'claude-opus-4-8', 'gpt-5.6-sol', 'deepseek-v4-flash']) {
-    assert.equal(offers.get(id), true, `${id} was probed with a working Off`)
+test('every model in the catalog offers a working Off', () => {
+  // Levels are withheld only where the relay rejects them — the retired glm-5.3
+  // was such a case (it always thinks). No model in the current catalog is:
+  // each declares `off` and was probed with it working.
+  for (const model of route.models) {
+    assert.ok('off' in model.reasoningEfforts, `${model.id} must offer Off`)
   }
 })
 
@@ -78,4 +76,18 @@ test('deepseek-v4-flash can actually stop thinking', () => {
   // relay's own `none` disables it.
   const efforts = route.models.find((model) => model.id === 'deepseek-v4-flash').reasoningEfforts
   assert.equal(efforts.off, 'none')
+})
+
+test('deepseek-v4-flash declares the DeepSeek thinking protocol explicitly', () => {
+  // The relay serves this model from a DeepSeek-compatible thinking API under
+  // its own hostname, so pi-ai cannot infer the protocol from the URL and the
+  // route has to say it. Without the replay flag, assistant tool-call history
+  // goes out without `reasoning_content` and that upstream rejects the request
+  // — only once a tool call has happened, which is why it hides from fresh
+  // sessions.
+  const compat = route.models.find((model) => model.id === 'deepseek-v4-flash').compat
+  assert.equal(compat?.thinkingFormat, 'deepseek')
+  assert.equal(compat?.requiresReasoningContentOnAssistantMessages, true)
+  assert.equal(compat?.supportsDeveloperRole, false)
+  assert.equal(compat?.supportsStore, false)
 })

@@ -64,15 +64,19 @@ after(() => new Promise((resolve) => server.close(resolve)))
  * Activate the plugin with a stub Cordis context and a stub settings service.
  *
  * The stub settings plane is what makes the endpoint observable: it hands the
- * plugin a scope whose `get()` reads a mutable section, exactly as the real
- * service does, so a test can switch endpoints the way the settings card does.
+ * plugin an `installSection` scope whose resolved value reads a mutable
+ * section, exactly as the real service does, so a test can switch endpoints
+ * the way the settings card does.
  *
  * @param {object} overrides - fields overriding the schema defaults.
  * @returns {{dispose: () => void, section: (patch: object) => void}} the handle.
  */
 async function activate(overrides) {
   const { apply, Config } = await import('../lib/index.js')
-  const entry = Config(overrides)
+  // These tests spec the fence's rewrite semantics, which are transport
+  // independent; pin the native path so a proxy-bearing launch environment on
+  // the development machine cannot silently swap the transport underneath them.
+  const entry = Config({ directEndpoints: 'none', ...overrides })
   let resolved = entry
   const disposers = []
   const ctx = {
@@ -83,7 +87,10 @@ async function activate(overrides) {
     inject(_services, callback) {
       callback({
         settings: {
-          register: () => ({ get: () => resolved, watch: () => () => {} }),
+          installSection(_owner, _ns, _schema, _entry, hooks) {
+            hooks.setSource(() => resolved)
+            hooks.onChange()
+          },
         },
         effect(fn) {
           disposers.push(fn() ?? (() => {}))
@@ -100,7 +107,7 @@ async function activate(overrides) {
     },
     /** Replace the resolved section, as a settings write does. */
     section: (patch) => {
-      resolved = Config({ ...overrides, ...patch })
+      resolved = Config({ directEndpoints: 'none', ...overrides, ...patch })
     },
   }
 }

@@ -15,9 +15,10 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 const require_ = createRequire(import.meta.url)
 
@@ -43,7 +44,20 @@ function piAiDist() {
 
   const globalModules = join(dirname(process.execPath), '..', 'lib', 'node_modules')
   const bundled = join(globalModules, '@deepseek-ai', 'dsh', 'node_modules', '@earendil-works', 'pi-ai', 'dist')
-  return existsSync(bundled) ? bundled : undefined
+  if (existsSync(bundled)) return bundled
+
+  // The test runner's Node is not necessarily the one dsh was installed
+  // beside; the `dsh` on PATH resolves back to its own package root.
+  try {
+    const { execFileSync } = require_('node:child_process')
+    const bin = execFileSync('sh', ['-c', 'command -v dsh'], { encoding: 'utf8' }).trim()
+    const pkgRoot = join(dirname(realpathSync(bin)), '..')
+    const viaDsh = join(pkgRoot, 'node_modules', '@earendil-works', 'pi-ai', 'dist')
+    if (existsSync(viaDsh)) return viaDsh
+  } catch {
+    // No dsh on PATH; nothing left to try.
+  }
+  return undefined
 }
 
 /**
@@ -98,10 +112,12 @@ const skip =
   key === undefined ? 'no AGENTROUTER_API_KEY' : dist === undefined ? 'pi-ai is not installed' : false
 
 test('the declared route streams a turn from the relay', { skip }, async () => {
-  const { createModels, createProvider } = await import(`${dist}/index.js`)
+  const { createModels, createProvider } = await import(pathToFileURL(join(dist, 'index.js')).href)
   // The lazy factory, exactly as `dsh-llm-pi-ai` resolves it from its protocol
   // table: `createProvider` wants the built streams object, not the module.
-  const { openAICompletionsApi } = await import(`${dist}/api/openai-completions.lazy.js`)
+  const { openAICompletionsApi } = await import(
+    pathToFileURL(join(dist, 'api', 'openai-completions.lazy.js')).href
+  )
   const { apply, Config } = await import('../lib/index.js')
 
   // The fence, activated exactly as the harness activates it: the entry config

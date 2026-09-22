@@ -100,6 +100,23 @@
               high: high
               xhigh: xhigh
               max: max
+          # Provisionally declared as a copy of gpt-5.6-sol: the model appeared
+          # in /v1/models while the Claude / GPT budget pool was exhausted (402
+          # «Budget pool quota has been exhausted»), so its own levels and its
+          # context ceiling could not be probed. Revisit both when the pool
+          # refreshes.
+          - id: gpt-6-astra
+            name: GPT 6 Astra
+            contextWindow: 272000
+            maxTokens: 128000
+            reasoningEfforts:
+              off:
+              minimal: minimal
+              low: low
+              medium: medium
+              high: high
+              xhigh: xhigh
+              max: max
           # Tiers mirror what the first-party `deepseek-official` route offers for
           # DeepSeek-V4-Flash — off / low / high / max — rather than the relay's
           # full enum. The relay does accept `minimal`, `medium`, and `xhigh` for
@@ -116,25 +133,22 @@
             name: DeepSeek V4 Flash
             contextWindow: 1000000
             maxTokens: 256000
+            # The relay routes this model to a DeepSeek-compatible thinking API,
+            # but under its own hostname, so pi-ai cannot infer DeepSeek
+            # compatibility from the URL the way it does for api.deepseek.com —
+            # the protocol has to be declared here. `deepseek` thinkingFormat
+            # sends `thinking` / `reasoning_effort` in DeepSeek's spelling, and
+            # the replay flag carries `reasoning_content` back on assistant
+            # tool-call history, which that upstream requires on every request
+            # whose history contains tool calls: omit it and the upstream
+            # rejects the whole request once a tool call has happened.
+            compat:
+              thinkingFormat: deepseek
+              requiresReasoningContentOnAssistantMessages: true
+              supportsDeveloperRole: false
+              supportsStore: false
             reasoningEfforts:
               off: none
-              low: low
-              high: high
-              max: max
-          # This model declares no `off` at all, and that is the honest shape
-          # rather than an omission: every level outside low / high / max — `none`,
-          # `minimal`, `medium`, `xhigh` — is refused with 400 «该模型始终思考，不
-          # 支持关闭思考；请使用 low、high 或 max。». It always thinks. Leaving `off`
-          # out withholds the level, so the picker never offers a switch the
-          # upstream would reject.
-          #
-          # `maxTokens` is the ceiling the relay states for this model: a larger
-          # value comes back as «max_tokens参数非法：限制数值范围[1,131072]».
-          - id: glm-5.3
-            name: GLM 5.3
-            contextWindow: 1000000
-            maxTokens: 131072
-            reasoningEfforts:
               low: low
               high: high
               max: max
