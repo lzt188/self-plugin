@@ -46,13 +46,16 @@ function iconComponent(name) {
 	};
 }
 
-const primitives = new Proxy({}, {
-	get: (_target, name) => name === "Tooltip"
-		? function Tooltip(props) {
-			return react.createElement(react.Fragment, null, props.children);
-		}
-		: iconComponent(String(name))
-});
+import { buildStrictPrimitives } from "./strict-primitives.mjs";
+
+const clientSource = readFileSync(new URL("../lib/client.js", import.meta.url), "utf8");
+const clientAsked = [...new Set([...clientSource.matchAll(/primitives\.([A-Za-z0-9_$]+)/g)].map((m) => m[1]))];
+const { primitives, version: primitivesVersion, libPath: primitivesLib, unexported: unexportedPrimitives } =
+	buildStrictPrimitives(react, clientAsked);
+assert.strictEqual(
+	unexportedPrimitives.length, 0,
+	`lib/client.js asks for primitives exports that the installed ${primitivesVersion} build (${primitivesLib}) does not provide: ${unexportedPrimitives.join(", ")}`
+);
 
 const mockRequire = (name) => {
 	if (name === "react") return react;

@@ -178,18 +178,15 @@ dom.window.fetch = async (input) => {
 
 //#region primitives mock + bundle load
 
-function iconComponent(name) {
-	return function Icon(props) {
-		return react.createElement("span", { "data-icon": name, "data-size": props.size ?? null });
-	};
-}
-const primitives = new Proxy({}, {
-	get: (_target, name) => name === "Tooltip"
-		? function Tooltip(props) {
-			return react.createElement(react.Fragment, null, props.children);
-		}
-		: iconComponent(String(name))
-});
+import { buildStrictPrimitives } from "./strict-primitives.mjs";
+
+const clientAsked = [...new Set([...clientSource.matchAll(/primitives\.([A-Za-z0-9_$]+)/g)].map((m) => m[1]))];
+const { primitives, version: primitivesVersion, libPath: primitivesLib, unexported: unexportedPrimitives } =
+	buildStrictPrimitives(react, clientAsked);
+assert.strictEqual(
+	unexportedPrimitives.length, 0,
+	`lib/client.js asks for primitives exports that the installed ${primitivesVersion} build (${primitivesLib}) does not provide: ${unexportedPrimitives.join(", ")}`
+);
 const mockRequire = (name) => {
 	if (name === "react") return react;
 	if (name === "react/jsx-runtime") return jsxRuntime;

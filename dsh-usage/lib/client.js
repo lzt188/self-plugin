@@ -1595,7 +1595,7 @@ window.__ModuleLoader__.load({
 								className: "u_back",
 								"aria-label": translate("action.back"),
 								onClick: onBack,
-								children: react_jsx_runtime.jsx(primitives.IconChevronLeftOutline14, { size: 14 })
+								children: react_jsx_runtime.jsx(primitives.IconChevronLeftOutlineRegular, { size: 14 })
 							}),
 							react_jsx_runtime.jsx("span", { className: "u_detailDate", children: day.date }),
 							react_jsx_runtime.jsx("span", { className: "u_detailHit", children: `${translate("widget.hit")} ${fmtHit(day.cacheHitRate)}` })
@@ -2909,7 +2909,7 @@ window.__ModuleLoader__.load({
 								"aria-label": translate("action.heatmapPop"),
 								title: translate("action.heatmapPop"),
 								onClick: toggleHeatmapPop,
-								children: react_jsx_runtime.jsx(primitives.IconDataOutline16, { size: 11 })
+								children: react_jsx_runtime.jsx(primitives.IconDataOutlineRegular, { size: 11 })
 							})
 						}),
 						react_jsx_runtime.jsx(primitives.Tooltip, {
@@ -2923,7 +2923,7 @@ window.__ModuleLoader__.load({
 								"aria-label": translate("action.usagePop"),
 								title: translate("action.usagePop"),
 								onClick: toggleUsagePop,
-								children: react_jsx_runtime.jsx(primitives.IconListPenOutline16, { size: 11 })
+								children: react_jsx_runtime.jsx(primitives.IconListPenOutlineRegular, { size: 11 })
 							})
 						}),
 						react_jsx_runtime.jsx("button", {
@@ -2932,7 +2932,7 @@ window.__ModuleLoader__.load({
 							"aria-label": translate("action.refresh"),
 							title: translate("action.refresh"),
 							onClick: retry,
-							children: react_jsx_runtime.jsx(primitives.IconRefreshOutline14, { size: 11 })
+							children: react_jsx_runtime.jsx(primitives.IconRefreshOutlineRegular, { size: 11 })
 						}),
 						react_jsx_runtime.jsx("button", {
 							type: "button",
@@ -2950,7 +2950,7 @@ window.__ModuleLoader__.load({
 								}
 								openPanel(null);
 							},
-							children: react_jsx_runtime.jsx(primitives.IconSettingsOutline14, { size: 12 })
+							children: react_jsx_runtime.jsx(primitives.IconSettingsOutlineRegular, { size: 12 })
 						})
 					]
 				})
@@ -3011,7 +3011,7 @@ window.__ModuleLoader__.load({
 											"data-active": showCustomizer || void 0,
 											"aria-label": translate("action.customize"),
 											onClick: toggleCustomizer,
-											children: react_jsx_runtime.jsx(primitives.IconSettingsOutline14, { size: 14 })
+											children: react_jsx_runtime.jsx(primitives.IconSettingsOutlineRegular, { size: 14 })
 										})
 									}),
 									react_jsx_runtime.jsx("button", {
@@ -3019,7 +3019,7 @@ window.__ModuleLoader__.load({
 										className: "u_iconButton",
 										"aria-label": translate("action.close"),
 										onClick: closeUsagePop,
-										children: react_jsx_runtime.jsx(primitives.IconCloseOutline16, { size: 14 })
+										children: react_jsx_runtime.jsx(primitives.IconCloseOutlineRegular, { size: 14 })
 									})
 								]
 							})
@@ -3086,7 +3086,7 @@ window.__ModuleLoader__.load({
 								className: "u_iconButton",
 								"aria-label": translate("action.close"),
 								onClick: closeHeatmapPop,
-								children: react_jsx_runtime.jsx(primitives.IconCloseOutline16, { size: 14 })
+								children: react_jsx_runtime.jsx(primitives.IconCloseOutlineRegular, { size: 14 })
 							})
 						]
 					}),
@@ -3159,7 +3159,7 @@ window.__ModuleLoader__.load({
 							react_jsx_runtime.jsxs("div", {
 								className: "u_headerLeft",
 								children: [
-									react_jsx_runtime.jsx(primitives.IconDataOutline16, { size: 16 }),
+									react_jsx_runtime.jsx(primitives.IconDataOutlineRegular, { size: 16 }),
 									react_jsx_runtime.jsx("span", { className: "u_title", children: translate("panel.title") })
 								]
 							}),
@@ -3175,7 +3175,7 @@ window.__ModuleLoader__.load({
 											className: "u_iconButton",
 											"aria-label": translate("action.refresh"),
 											onClick: retry,
-											children: react_jsx_runtime.jsx(primitives.IconRefreshOutline14, { size: 14 })
+											children: react_jsx_runtime.jsx(primitives.IconRefreshOutlineRegular, { size: 14 })
 										})
 									}),
 									react_jsx_runtime.jsx(primitives.Tooltip, {
@@ -3187,7 +3187,7 @@ window.__ModuleLoader__.load({
 											className: "u_iconButton",
 											"aria-label": translate("action.close"),
 											onClick: () => setOpen(false),
-											children: react_jsx_runtime.jsx(primitives.IconCloseOutline16, { size: 14 })
+											children: react_jsx_runtime.jsx(primitives.IconCloseOutlineRegular, { size: 14 })
 										})
 									})
 								]
@@ -3260,7 +3260,7 @@ window.__ModuleLoader__.load({
 													"aria-label": translate("action.hide"),
 													title: translate("action.hide"),
 													onClick: () => toggleWidgetKey(id, "visible"),
-													children: react_jsx_runtime.jsx(primitives.IconCloseOutline16, { size: 12 })
+													children: react_jsx_runtime.jsx(primitives.IconCloseOutlineRegular, { size: 12 })
 												})
 											]
 										}),
