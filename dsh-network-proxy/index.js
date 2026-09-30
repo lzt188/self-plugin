@@ -2,8 +2,15 @@
 // Upstream source: https://github.com/kriskite/dsh-network-proxy
 // Pinned upstream commit: 4cc265a2115cffdcfbf4f74257243b12a98ac9e0
 //
-// DSH Desktop 2.0.10 (@deepseek-ai/dsh 0.1.5-rc.2) compatibility patch:
-// `activate()` no longer closes the previous global dispatcher. The Desktop
+// @deepseek-ai/dsh-settings 0.2.0-rc.2 port: the legacy `settingsNamespace`
+// factory and `settings.register(ns, schema, { applies, validate })` scope API
+// were removed. The plugin's live-editable proxy settings are now declared as
+// the plugin's own schemastery `Config` (read by SettingsForms through
+// `fiber.runtime.Config`); a live edit flows through the config editor + Loader
+// HMR, which re-mounts this entry and re-runs `apply()` with the new config.
+//
+// DSH Desktop 2.0.10 compatibility note (kept from the upstream patch):
+// `activate()` does not close the previous global dispatcher. The Desktop
 // launcher installs a boot-time proxy policy through @deepseek-ai/dsh-http-proxy,
 // whose `proxyRouteFor()` keeps handing that dispatcher object to the web-fetch
 // tool for proxied routes even after another dispatcher is installed globally.
@@ -11,16 +18,13 @@
 // is active. Skipping the close only leaks one dispatcher per mode switch.
 import { execFileSync } from 'node:child_process'
 import z from '@deepseek-ai/schemastery'
-import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import {
   Agent,
   EnvHttpProxyAgent,
   ProxyAgent,
-  getGlobalDispatcher,
   setGlobalDispatcher,
 } from 'undici'
 
-const NETWORK_PROXY_NAMESPACE = settingsNamespace('network-proxy')
 const PROXY_ENV_NAMES = [
   'HTTP_PROXY',
   'HTTPS_PROXY',
@@ -35,13 +39,29 @@ const inheritedProxyEnvironment = Object.fromEntries(
   PROXY_ENV_NAMES.map((name) => [name, process.env[name]]),
 )
 
-const NetworkProxySettingsSchema = z.object({
-  mode: z.union([
+/**
+ * Mark a schemastery field as live-editable when the running schemastery
+ * supports `.volatile()` (host 3.18.4+); fall back to an ordinary field on
+ * older releases (the plugin's own 3.18.2 peer lacks it). Either way the
+ * value is read through {@link readLive} below.
+ */
+const live = (schema) => (typeof schema.volatile === 'function' ? schema.volatile() : schema)
+
+/** Read a config field whether it is a volatile accessor (`.get()`) or a plain value. */
+const readLive = (value) => (typeof value?.get === 'function' ? value.get() : value)
+
+/**
+ * Live-editable proxy settings, exposed as this plugin's own configuration.
+ * SettingsForms presents and edits these volatile fields; a change re-mounts
+ * the entry (Loader HMR), re-running {@link apply} with the updated values.
+ */
+export const Config = z.object({
+  mode: live(z.union([
     z.const('system').description('Follow system'),
     z.const('manual').description('Manual proxy'),
     z.const('direct').description('Direct'),
-  ]).default('system'),
-  url: z.string().default(''),
+  ]).default('system')),
+  url: live(z.string().default('')),
 })
 
 function validateSettings(value) {
@@ -153,28 +173,39 @@ function applyProxyEnvironment(value) {
   else clearProxyEnvironment()
 }
 
-function apply(ctx) {
-  ctx.inject(['settings'], (settingsCtx) => {
-    const scope = settingsCtx.settings.register(
-      NETWORK_PROXY_NAMESPACE,
-      NetworkProxySettingsSchema,
-      { applies: 'live', validate: validateSettings },
-    )
-    let activeDispatcher = getGlobalDispatcher()
-
-    const activate = (value) => {
-      validateSettings(value)
-      // Compatibility (DSH Desktop 2.0.10): the previous dispatcher is
-      // intentionally left unclosed — @deepseek-ai/dsh-http-proxy may still
-      // reference it for proxied web-fetch routes. See the file header.
-      activeDispatcher = dispatcherFor(value)
-      applyProxyEnvironment(value)
-      setGlobalDispatcher(activeDispatcher)
-    }
-
-    activate(scope.get())
-    settingsCtx.effect(() => scope.watch((next) => activate(next)), 'network-proxy: live settings')
-  })
+function activate(value) {
+  validateSettings(value)
+  // The previous global dispatcher is intentionally left unclosed —
+  // @deepseek-ai/dsh-http-proxy may still reference it for proxied web-fetch
+  // routes. See the file header. Skipping the close only leaks one dispatcher.
+  const dispatcher = dispatcherFor(value)
+  applyProxyEnvironment(value)
+  setGlobalDispatcher(dispatcher)
 }
 
-export { apply, parseWindowsProxyServer, readWindowsSystemProxy, validateSettings }
+/**
+ * Activate the global undici dispatcher from the plugin's live proxy config.
+ *
+ * The proxy activates immediately from {@link Config} (it does not wait on the
+ * settings service). A live settings edit re-mounts this entry through the
+ * config editor + Loader HMR, so `apply()` runs again with the new config: the
+ * registered effect first restores the inherited proxy environment, then the new
+ * `activate()` applies the updated mode/url.
+ * @param ctx - the plugin's Context.
+ * @param config - the resolved schemastery Config (volatile `mode`/`url`).
+ */
+export function apply(ctx, config) {
+  activate({ mode: readLive(config.mode), url: readLive(config.url) })
+
+  // Present the settings page through the settings service (optional; the
+  // proxy activates independently of it).
+  ctx.inject(['settings'], (settingsCtx) => {
+    settingsCtx.effect(() => settingsCtx.settings.configure({ auto: true }, ctx.fiber), 'network-proxy: settings presentation')
+  })
+
+  // Restore the inherited proxy environment when this entry is re-mounted or
+  // disposed, so the next activation starts from the launch-time baseline.
+  ctx.effect(() => () => restoreInheritedProxyEnvironment(), 'network-proxy: restore proxy env on reload')
+}
+
+export { parseWindowsProxyServer, readWindowsSystemProxy, validateSettings }

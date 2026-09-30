@@ -1,12 +1,17 @@
-// Offline smoke test for the DSH Desktop 2.0.10 compatibility build of
+// Offline smoke test for the @deepseek-ai/dsh-settings 0.2.0-rc.2 port of
 // dsh-network-proxy. Run: npm test
 //
-// The plugin's peers (@deepseek-ai/schemastery, @deepseek-ai/dsh-settings) and
-// undici resolve from the surrounding installation when the plugin runs inside
-// a DSH profile. In a bare checkout (CI) they may be absent, so a missing
-// dependency reports SKIP instead of failing the suite; with the dependencies
-// present every check below runs for real.
+// The plugin's peers (@deepseek-ai/schemastery) and undici resolve from the
+// surrounding installation when the plugin runs inside a DSH profile. In a bare
+// checkout (CI) they may be absent, so a missing dependency reports SKIP instead
+// of failing the suite; with the dependencies present every check below runs
+// for real.
 import assert from 'node:assert/strict'
+
+const PROXY_ENV_NAMES = [
+  'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY',
+  'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy',
+]
 
 const checks = []
 function check(name, fn) {
@@ -31,11 +36,26 @@ try {
   throw error
 }
 
+// Captured before any check mutates the environment: the restore effect must put
+// every proxy variable back onto this baseline, regardless of its values.
+const baselineEnv = Object.fromEntries(PROXY_ENV_NAMES.map((name) => [name, process.env[name]]))
+
 check('module exports the expected surface', () => {
   assert.equal(typeof mod.apply, 'function')
   assert.equal(typeof mod.parseWindowsProxyServer, 'function')
   assert.equal(typeof mod.readWindowsSystemProxy, 'function')
   assert.equal(typeof mod.validateSettings, 'function')
+  assert.equal(typeof mod.Config, 'function')
+})
+
+check('Config declares the live proxy settings schema (volatile mode/url)', () => {
+  const read = (value) => (typeof value?.get === 'function' ? value.get() : value)
+  const resolved = mod.Config({ mode: 'manual', url: 'http://127.0.0.1:7890' })
+  assert.equal(read(resolved.mode), 'manual')
+  assert.equal(read(resolved.url), 'http://127.0.0.1:7890')
+  const defaulted = mod.Config({})
+  assert.equal(read(defaulted.mode), 'system')
+  assert.equal(read(defaulted.url), '')
 })
 
 check('parseWindowsProxyServer: single host applies to both schemes', () => {
@@ -76,60 +96,44 @@ check('validateSettings: manual mode accepts http/https, system/direct pass', ()
   mod.validateSettings({ mode: 'direct', url: '' })
 })
 
-check('apply() registers the network-proxy namespace with live applies + validate hook', () => {
-  let registered
+check('apply() activates direct mode from Config and registers the restore effect', () => {
   const effects = []
-  const scope = {
-    get: () => ({ mode: 'direct', url: '' }),
-    watch: (fn) => {
-      scope.watcher = fn
-      return () => {}
-    },
+  const ctx = {
+    fiber: {},
+    inject: () => {},
+    effect: (factory, name) => effects.push({ factory, name }),
   }
-  const settingsCtx = {
-    settings: {
-      register: (ns, schema, options) => {
-        registered = { ns, schema, options }
-        return scope
-      },
-    },
-    effect: (fn, name) => effects.push({ fn, name }),
-  }
-  mod.apply({ inject: (names, fn) => { assert.deepEqual(names, ['settings']); fn(settingsCtx) } })
-  assert.ok(registered, 'settings.register was called')
-  assert.equal(String(registered.ns), 'network-proxy')
-  assert.equal(registered.options.applies, 'live')
-  assert.equal(typeof registered.options.validate, 'function')
-  assert.equal(effects.length, 1)
-  assert.equal(effects[0].name, 'network-proxy: live settings')
-  // The initial activate() ran with mode "direct" from scope.get().
+  mod.apply(ctx, { mode: { get: () => 'direct' }, url: { get: () => '' } })
   for (const name of ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'ALL_PROXY', 'all_proxy']) {
     assert.equal(process.env[name], undefined, `${name} must be cleared in direct mode`)
   }
+  assert.equal(effects.length, 1, 'the restore proxy-env effect is registered')
+  assert.equal(effects[0].name, 'network-proxy: restore proxy env on reload')
 })
 
-check('live settings watch drives dispatcher activation (global dispatcher flips)', () => {
+check('apply() in manual mode replaces the global dispatcher', () => {
   const original = getGlobalDispatcher()
-  let watcher
-  const scope = {
-    get: () => ({ mode: 'system', url: '' }),
-    watch: (fn) => { watcher = fn; return () => {} },
-  }
-  const settingsCtx = {
-    settings: { register: () => scope },
-    // cordis effect() runs the callback at registration time.
-    effect: (fn) => fn(),
-  }
-  mod.apply({ inject: (_names, fn) => fn(settingsCtx) })
+  const ctx = { fiber: {}, inject: () => {}, effect: () => {} }
+  mod.apply(ctx, { mode: { get: () => 'manual' }, url: { get: () => 'http://127.0.0.1:7890' } })
   try {
-    assert.ok(watcher, 'scope.watch was wired')
-    watcher({ mode: 'manual', url: 'http://127.0.0.1:7890' })
     const after = getGlobalDispatcher()
     assert.notEqual(after, original, 'global dispatcher must be replaced by the plugin')
-    // The dispatcher must still be usable as a dispatcher (dispatch contract).
     assert.equal(typeof after.dispatch, 'function')
   } finally {
     setGlobalDispatcher(original)
+  }
+})
+
+check('restore effect restores the inherited proxy environment on reload', () => {
+  let factory
+  const ctx = { fiber: {}, inject: () => {}, effect: (fn) => { factory = fn } }
+  mod.apply(ctx, { mode: { get: () => 'manual' }, url: { get: () => 'http://127.0.0.1:7890' } })
+  assert.equal(process.env.HTTP_PROXY, 'http://127.0.0.1:7890')
+  const dispose = factory()
+  assert.equal(typeof dispose, 'function', 'effect factory returns a disposer')
+  dispose()
+  for (const name of PROXY_ENV_NAMES) {
+    assert.equal(process.env[name], baselineEnv[name], `${name} must return to the launch baseline`)
   }
 })
 
