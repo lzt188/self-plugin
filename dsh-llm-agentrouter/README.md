@@ -3,10 +3,17 @@
 [![test](https://github.com/aqiu817/dsh-llm-agentrouter/actions/workflows/test.yml/badge.svg)](https://github.com/aqiu817/dsh-llm-agentrouter/actions/workflows/test.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
-![?](https://img.cdn1.vip/i/6aae264923a5d_1789797961.png)
-本模组曾因中转站渠道进入 probation、上游校验不一致而暂停更新。**2.1.0 起恢复维护**：出站请求已能同时满足当前全部上游池（围栏新增直连传输绕过 WAF 质询、工具 schema 补齐 `required`、声明 DeepSeek 思考协议，见下文与致谢）。
+把 AgentRouter 中转站接入 DeepSeek Harness 的 profile bundle：一条 provider 路由、三个模型及其推理档位，一个在「设置 → 插件」里切换国内 / 国际端点的开关，以及一层让出站请求符合该中转站要求的兼容处理。
 
-把 AgentRouter 中转站接入 DeepSeek Harness 的 profile bundle：一条 provider 路由、五个模型及其推理档位，一个在「设置 → 插件」里切换国内 / 国际端点的开关，以及一层让出站请求符合该中转站要求的兼容处理。
+## 相关插件
+
+同一作者维护的其他 DSH 插件：
+
+| 插件 | 做什么 |
+| --- | --- |
+| [dsh-plugin-continue-on-limit](https://github.com/aqiu817/dsh-plugin-continue-on-limit) | 一轮因输出 token 用尽而结束时，自动替你发下一轮的「继续」；带每会话突发上限、最小间隔和关闭开关 |
+| [dsh-plugin-auto-retry](https://github.com/aqiu817/dsh-plugin-auto-retry) | 接手内置重试器放弃的模型请求失败，沿它的退避曲线继续重试，并显示会话记录里被丢弃的完整错误 |
+| [dsh-llm-kilo-gateway](https://github.com/aqiu817/dsh-llm-kilo-gateway) | 把 Kilo Gateway 的免费模型接入为 DSH 的模型提供商：自动发现免费目录，暴露工具 / 推理 / 图像能力，并附 API Key、变更日志与用量统计的设置页 |
 
 ## 它做了什么
 
@@ -16,7 +23,7 @@
 | 端点 + 请求兼容 | `lib/index.js` | 注册 `llm-agentrouter` 设置分节；把哨兵主机改写为所选端点，把 `user-agent` 换成该中转站要求的取值，按端点绕过进程代理直连，并给缺失 `required` 数组的工具 schema 补上空数组（部分上游池按 null 校验并拒绝） |
 | 路由自愈 | `lib/route.js` | 路由的运行时副本。profile 自己的补丁层会整体覆盖 `llm-pi-ai.providers`（见「桌面端支持」），围栏据此把这条路由重新声明回去 |
 | 端点开关 + 重试开关 | `lib/client.js` | 注册「插件」页里的 AgentRouter 卡片：端点分段控件、静默重试开关、最大尝试次数。设置数据由宿主 `settings.describe` 提供，写入走 `configForms` 的 `mutate` |
-| 行为测试 | `test/` | 65 项：浏览器 bundle 5 项、bundle patch 8 项、改写语义 9 项（含 3 项 402 注释）、直连传输 10 项、工具 schema 补齐 3 项、静默重试 7 项、路由自愈 17 项、运行时路由与补丁一致 4 项、活体流式 2 项（无 key 时跳过） |
+| 行为测试 | `test/` | 69 项：浏览器 bundle 5 项、bundle patch 10 项、改写语义 10 项（含 4 项 402 注释）、直连传输 10 项、工具 schema 补齐 4 项、静默重试 7 项、路由自愈 17 项、运行时路由与补丁一致 4 项、活体流式 2 项（无 key 时跳过） |
 
 ## 为什么是一条路由，而不是两条
 
@@ -28,15 +35,19 @@
 
 ## 当前版本所支持的模型与参数
 
-| 模型 ID | 名称 | 上下文窗口 | 最大输出 | 推理强度（档位） | 备注 |
-| --- | --- | --- | --- | --- | --- |
-| `claude-opus-5` | Claude Opus 5 | 1,000,000 | 128,000 | off / low / medium / high / xhigh / max |  |
-| `claude-opus-4-8` | Claude Opus 4.8 | 1,000,000 | 128,000 | off / low / medium / high / xhigh / max |  |
-| `gpt-5.6-sol` | GPT 5.6 Sol | 272,000 | 128,000 | off / minimal / low / medium / high / xhigh / max |  |
-| `gpt-6-astra` | GPT 6 Astra | 272,000 | 128,000 | off / minimal / low / medium / high / xhigh / max | 暂同 GPT 5.6 Sol——该模型上线时 Claude / GPT 预算池恰已耗尽（402），档位与上限未能活体验证，额度刷新后校订 |
-| `deepseek-v4-flash` | DeepSeek V4 Flash | 1,000,000 | 256,000 | off / low / high / max | 档位对齐第一方目录；`off` 送出 `none` 而非留空 |
+| 模型 ID | 名称 | 上下文窗口 | 最大输出 | 输入模态 | 推理强度（档位） | 备注 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `gpt-5.6-sol` | GPT 5.6 Sol | 1,050,000 | 128,000 | text / image | off / minimal / low / medium / high / xhigh / max |  |
+| `gpt-6-astra` | GPT 6 Astra | 1,050,000 | 128,000 | text / image | off / minimal / low / medium / high / xhigh / max |  |
+| `gpt-6.1-sol` | GPT 6.1 Sol | 1,050,000 | 128,000 | text / image | off / low / medium / high / xhigh / max | 档位对齐厂商目录的 `gpt-6-sol`（不提供 `minimal`） |
 
-> 所有模型均走 `/v1/chat/completions`。两个端点的 `/v1/models` 返回同一组 ID。`maxTokens` 上限来自中转站返回值约束，上下文窗口以「大海捞针」实测为准。
+> 三个模型的 `off` 都送出 `reasoning.effort: "none"`，**不留空**。Responses 下把档位映射为 `null` 等于完全不发 `reasoning` 对象，中转站便让模型照常思考——实测 `gpt-5.6-sol` 省略该字段返回 25 个 reasoning token，显式 `none` 返回 0 个。空 `off:` 会渲染出一个按了没反应的「关闭」档。
+
+> 容量与模态来自 [models.dev](https://models.dev) 的 `agentrouter` 条目；它对三个模型一致给出 1,050,000 / 128,000 与 text / image / PDF 输入，而 harness 只认 `text` 与 `image`，所以 `defaultInput` 声明这两种。
+
+> `claude-opus-5-5` 与 `deepseek-v4-flash` 已不在中转站的 `/v1/models` 中，实测调用返回 **503「当前分组 probation 下对于模型 … 无可用渠道」**，因此本版本不再声明——宁可让选择器里没有，也不放一个必然失败的条目。渠道恢复后把它们加回 `cordis.patch.yml` 即可；`deepseek-v4-flash` 需要的 DeepSeek 思考协议声明在该文件的 git 历史里。
+
+> 所有模型均走 **`/v1/responses`（OpenAI Responses API）**，不是 `/v1/chat/completions`。中转站对这三个模型会直接拒绝 chat 接口：`模型 gpt-5.6-sol 不支持 /v1/chat/completions 接口，请改用 /v1/responses`。`maxTokens` 上限来自中转站返回值约束，上下文窗口以「大海捞针」实测为准。
 
 ## 安装
 
@@ -215,6 +226,9 @@ NODE_USE_ENV_PROXY=1 HTTPS_PROXY=http://<代理主机>:<端口> dsh web
 
 | 插件版本 | 适配的 dsh | 说明 |
 | --- | --- | --- |
+| 2.6.1 | 0.2.x | 改用 **Responses API**（`/v1/responses`）与 `codex_cli_rs` User-Agent，`off` 一律送 `none`。**2.6.0 在这条路由上无法调用任何模型，请直接升到这个版本** |
+| 2.6.0 | 0.2.x | 模型目录再次跟随中转站：`gpt-5.6-sol` 回归，`claude-opus-5-5` 与 `deepseek-v4-flash` 因无可用渠道下架；容量与输入模态取自 models.dev（1,050,000 / 128,000，text + image）。**协议仍是 chat completions，三个模型均返回 400，已由 2.6.1 修复** |
+| 2.5.0 | 0.2.x | 模型目录跟随中转站更新：`claude-opus-5` → `claude-opus-5-5`、`gpt-5.6-sol` → `gpt-6.1-sol`，`claude-opus-4-8` 下架；402 只在预算池真的耗尽时追加提示 |
 | 2.4.0 | 0.2.x | 设置页显式注册到全部三个插槽（`plugins.bundle.config` / `plugins.row.config` / `plugins.item`）；端点 + 静默重试 + 尝试次数 |
 | 2.3.0 | 0.1.7+ / 0.2.x | 静默重试开关 + 桌面端支持（profile 覆盖路由时自愈） |
 | 2.2.1 | 0.1.7+ | 依赖 `autoGenerate` 自动页 + `.volatile()` 引用单元；宿主客户端不渲染 schema 自动页，故设置入口实际不可见 |
@@ -225,7 +239,7 @@ NODE_USE_ENV_PROXY=1 HTTPS_PROXY=http://<代理主机>:<端口> dsh web
 
 ```bash
 npm ci        # 仅测试所需的 devDependencies
-npm test      # 65 项
+npm test      # 69 项
 ```
 
 `lib/route.js` 由 `cordis.patch.yml` 生成，不要手改：
@@ -236,7 +250,13 @@ npm run gen-route     # 等价于 node scripts/gen-route.mjs
 
 `test/route-parity.test.mjs` 会比对两者，改了一处而忘了重跑生成器会被测试拦下。
 
-克隆后即可跑：65 项中 63 项完全离线，2 项活体测试在无 key 时自动跳过（空字符串等同于无 key——未配置的 GitHub Actions secret 正是以空串到达）。CI（`.github/workflows/test.yml`）跑的就是这一条命令；仓库若配置了 `AGENTROUTER_API_KEY` secret，那两项也会真跑。
+克隆后即可跑：69 项中 65 项通过，4 项跳过——2 项活体测试在无 key 时跳过（空字符串等同于无 key，未配置的 GitHub Actions secret 正是以空串到达），另 2 项只在 `deepseek-v4-flash` 位于中转站目录中时才执行。CI（`.github/workflows/test.yml`）跑的就是这一条命令；仓库若配置了 `AGENTROUTER_API_KEY` secret，那 2 项活体测试也会真跑。
+
+**这两项活体测试会真的向中转站发请求，每次都在消耗额度。** 它们的 key 解析顺序是 `AGENTROUTER_API_KEY` 环境变量、然后 `$DSH_HOME/.credentials.yaml`，所以只要凭据文件里存了 key 就会跑——把 `DSH_HOME` 指到一个空目录即可让它们重新跳过：
+
+```bash
+DSH_HOME=/tmp/dsh-offline npm test     # 65 通过、4 跳过，零请求
+```
 
 
 活体测试需要一个可解析的 key，否则自动跳过——因此离线也能跑完整套。key 的来源，按优先级：
@@ -255,7 +275,7 @@ npm run publish:dry     # 校验 token + 打包预检，不发出去
 npm run publish:npm     # 真正发布
 ```
 
-必须走这个脚本，不要直接 `npm publish`：本机 `~/.npmrc` 的全局 `registry` 指向 `registry.npmmirror.com`（只读镜像），直接发布会打到镜像上并失败；脚本显式指定 `--registry=https://registry.npmjs.org/` 覆盖它。npmjs 的 token 在同一个文件里（`//registry.npmjs.org/:_authToken`），脚本在发布前先校验它，401 时给出替换 token 的指令——npm 自己在这种情况下打印的报错不会说明是这两项设置中的哪一项有问题。
+必须走这个脚本，不要直接 `npm publish`：本机 `~/.npmrc` 的全局 `registry` 指向 `registry.npmmirror.com`（只读镜像），直接发布会打到镜像上并失败；脚本显式指定 `--registry=https://registry.npmjs.org/` 覆盖它。npmjs 的 token 在同一个文件里（`//registry.npmjs.org/:_authToken`），脚本在发布前对它做一次只读校验，被拒时给出替换 token 的指令然后**继续**——`/-/whoami` 需要能读取账号的 token，而只授权发布的细粒度 token 在那里同样会被拒（401）却发布得动，所以这里不做拦截，交给 npm 判定。
 
 ## 致谢
 

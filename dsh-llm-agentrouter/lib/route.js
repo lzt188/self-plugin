@@ -27,56 +27,24 @@ const PI_AI_ENTRY = { id: 'llm-pi-ai', name: '@deepseek-ai/dsh-llm-pi-ai' }
 const AGENTROUTER_ROUTE = {
   "displayName": "AgentRouter",
   "apiKeyEnv": "AGENTROUTER_API_KEY",
-  "api": "openai-completions",
+  "api": "openai-responses",
   "baseURL": "https://relay.agentrouter.internal/v1",
   "defaultInput": [
-    "text"
+    "text",
+    "image"
   ],
   "compat": {
-    "thinkingFormat": "openai",
-    "supportsReasoningEffort": true,
     "supportsDeveloperRole": false,
-    "maxTokensField": "max_tokens",
-    "supportsStore": false,
-    "supportsStrictMode": true,
-    "supportsUsageInStreaming": true
+    "supportsStrictMode": true
   },
   "models": [
     {
-      "id": "claude-opus-5",
-      "name": "Claude Opus 5",
-      "contextWindow": 1000000,
-      "maxTokens": 128000,
-      "reasoningEfforts": {
-        "off": null,
-        "low": "low",
-        "medium": "medium",
-        "high": "high",
-        "xhigh": "xhigh",
-        "max": "max"
-      }
-    },
-    {
-      "id": "claude-opus-4-8",
-      "name": "Claude Opus 4.8",
-      "contextWindow": 1000000,
-      "maxTokens": 128000,
-      "reasoningEfforts": {
-        "off": null,
-        "low": "low",
-        "medium": "medium",
-        "high": "high",
-        "xhigh": "xhigh",
-        "max": "max"
-      }
-    },
-    {
       "id": "gpt-5.6-sol",
       "name": "GPT 5.6 Sol",
-      "contextWindow": 272000,
+      "contextWindow": 1050000,
       "maxTokens": 128000,
       "reasoningEfforts": {
-        "off": null,
+        "off": "none",
         "minimal": "minimal",
         "low": "low",
         "medium": "medium",
@@ -88,10 +56,10 @@ const AGENTROUTER_ROUTE = {
     {
       "id": "gpt-6-astra",
       "name": "GPT 6 Astra",
-      "contextWindow": 272000,
+      "contextWindow": 1050000,
       "maxTokens": 128000,
       "reasoningEfforts": {
-        "off": null,
+        "off": "none",
         "minimal": "minimal",
         "low": "low",
         "medium": "medium",
@@ -101,20 +69,16 @@ const AGENTROUTER_ROUTE = {
       }
     },
     {
-      "id": "deepseek-v4-flash",
-      "name": "DeepSeek V4 Flash",
-      "contextWindow": 1000000,
-      "maxTokens": 256000,
-      "compat": {
-        "thinkingFormat": "deepseek",
-        "requiresReasoningContentOnAssistantMessages": true,
-        "supportsDeveloperRole": false,
-        "supportsStore": false
-      },
+      "id": "gpt-6.1-sol",
+      "name": "GPT 6.1 Sol",
+      "contextWindow": 1050000,
+      "maxTokens": 128000,
       "reasoningEfforts": {
         "off": "none",
         "low": "low",
+        "medium": "medium",
         "high": "high",
+        "xhigh": "xhigh",
         "max": "max"
       }
     }
